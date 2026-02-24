@@ -2,7 +2,7 @@
 #SBATCH --partition=general
 #SBATCH --qos=regular
 #SBATCH --job-name=auditory_prf
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks=1             # Single task (your Python script)
 #SBATCH --cpus-per-task=16      # CPUs for parallel data generation
 #SBATCH --mem=256G

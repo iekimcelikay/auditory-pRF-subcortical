@@ -52,7 +52,7 @@ def main():
     # Get WAV files
 
     wav_dir = PROJECT_ROOT / "stimuli" / "produced"
-    wav_files = sorted(wav_dir.glob("*.wav"))
+    wav_files = sorted(wav_dir.glob("sequence02_fc440hz_dur200ms_isi100ms_total1.0sec_numtones3.wav"))
 
     if not wav_files:
         print(f"No WAV files found in {wav_dir}")
