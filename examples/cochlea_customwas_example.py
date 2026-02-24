@@ -39,7 +39,7 @@ def main():
 
         # Output settings
         output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_240226_01"),
-        experiment_name="customsequences_test05",
+        experiment_name="dipc_fullmodeltest_01",
         save_formats=['npz'],
         save_mean_rates=False,
         save_psth=True,
