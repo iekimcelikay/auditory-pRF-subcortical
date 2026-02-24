@@ -37,7 +37,7 @@ def main():
         fs_target = 1000.0,
 
         # Output settings
-        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_240226_02"),
+        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_240226_03"),
         experiment_name="dipc",
         save_formats=['npz'],
         save_mean_rates=False,
