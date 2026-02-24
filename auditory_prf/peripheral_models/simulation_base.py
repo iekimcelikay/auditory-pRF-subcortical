@@ -6,11 +6,11 @@ This module contains the shared logic for all simulation types.
 
 import logging
 from pathlib import Path
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.cochlea_processor import CochleaProcessor
-from utils.logging_configurator import LoggingConfigurator
-from utils.metadata_saver import MetadataSaver
-from utils.result_saver import ResultSaver
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.cochlea_processor import CochleaProcessor
+from auditory_prf.utils.logging_configurator import LoggingConfigurator
+from auditory_prf.utils.metadata_saver import MetadataSaver
+from auditory_prf.utils.result_saver import ResultSaver
 
 logger = logging.getLogger(__name__)
 

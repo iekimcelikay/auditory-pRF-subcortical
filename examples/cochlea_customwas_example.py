@@ -1,12 +1,10 @@
-import sys
 from pathlib import Path
 import os
 
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.cochlea_simulation import CochleaWavSimulation
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulation
 
 PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
-sys.path.insert(0, str(PROJECT_ROOT))
 
 def custom_parser(filename:str) -> dict:
     """Parse custon filename format: sequence01_fc440hz_dur200ms_isi100ms_total5sec_numtones1.wav """

@@ -6,25 +6,19 @@ This module handles simulation of tone stimuli generated programmatically.
 
 import gc
 import logging
-import sys
 import time
 from pathlib import Path
 from typing import Dict
 
-# Add parent directories to path for imports to resolve modules
-_project_root = Path(__file__).parent.parent.parent
-_models_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(_project_root))
-sys.path.insert(0, str(_models_dir))
 
 # Project-level imports
-from utils.folder_management import FolderManager
-from stimuli.soundgen import SoundGen
-from utils.stimulus_utils import generate_tone_generator
+from auditory_prf.utils.folder_management import FolderManager
+from auditory_prf.stimuli.soundgen import SoundGen
+from auditory_prf.utils.stimulus_utils import generate_tone_generator
 
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.tone_config import ToneConfig
-from peripheral_models.simulation_base import _SimulationBase
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.tone_config import ToneConfig
+from auditory_prf.peripheral_models.simulation_base import _SimulationBase
 
 logger = logging.getLogger(__name__)
 

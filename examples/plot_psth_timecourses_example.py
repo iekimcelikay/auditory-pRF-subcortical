@@ -5,16 +5,13 @@ This script loads PSTH data saved from CochleaWavSimulation and visualizes
 the population response time courses for each cochlear channel.
 """
 
-import sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.result_saver import ResultSaver
-from visualization.plot_cochlea_output import plot_psth_timecourses
+from auditory_prf.utils.result_saver import ResultSaver
+from auditory_prf.visualization.plot_cochlea_output import plot_psth_timecourses
 
 
 def load_psth_data(results_dir, filename=None):

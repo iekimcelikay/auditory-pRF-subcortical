@@ -1,6 +1,6 @@
 """Test script to verify calculate_population_rate works with both mean_rates and PSTH."""
 import numpy as np
-from utils.calculate_population_rate import calculate_population_rate
+from auditory_prf.utils.calculate_population_rate import calculate_population_rate
 
 print("Testing calculate_population_rate with different input shapes")
 print("=" * 60)

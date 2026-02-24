@@ -1,5 +1,5 @@
 import thorns.waves
-from stimuli.soundgen import SoundGen
+from auditory_prf.stimuli.soundgen import SoundGen
 import numpy as np
 from tqdm import tqdm
 

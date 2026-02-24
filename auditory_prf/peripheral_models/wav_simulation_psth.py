@@ -1,46 +1,46 @@
 """
-WAV file simulation using analytical mean rate calculation.
+WAV file simulation with full PSTH calculation.
 
-This module handles simulation of WAV file stimuli using the rate model
-(run_zilany2014_rate) for efficient mean rate computation.
+This module handles simulation of WAV file stimuli using the full spike train model
+(run_zilany2014) to generate PSTHs along with mean rates.
 """
 
 import gc
 import logging
-import sys
 from pathlib import Path
 import time
 from typing import Dict
 import soundfile as sf
 import thorns.waves as wv
 
-# Add parent directories to path for imports to resolve modules
-_project_root = Path(__file__).parent.parent.parent
-_models_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(_project_root))
-sys.path.insert(0, str(_models_dir))
 
 # Project-level imports
-from utils.timestamp_utils import generate_timestamp
-from utils.calculate_population_rate import calculate_population_rate
-
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.simulation_base import _SimulationBase
+from auditory_prf.utils.timestamp_utils import generate_timestamp
+from auditory_prf.utils.calculate_population_rate import calculate_population_rate
+from auditory_prf.utils.stimulus_utils import ensure_mono
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.simulation_base import _SimulationBase
 
 logger = logging.getLogger(__name__)
 
 
-class CochleaWavSimulationMean(_SimulationBase):
+
+
+
+class CochleaWavSimulation(_SimulationBase):
     """
-    Docstring for CochleaWavSimulation
+    WAV file simulation with full PSTH calculation.
+
+    Uses full spike train model (run_zilany2014) instead of rate model
+    to generate PSTHs along with mean rates.
     """
+
     @staticmethod
     def parse_wav_filename(filename: str) -> dict:
         """
         Parse filenames like (s3_animal_1_ramp10.wav)
         """
-
-        stem = filename.replace('wav', '')
+        stem = filename.replace('.wav', '')
         parts = stem.split('_')
 
         if len(parts) >= 4:
@@ -61,9 +61,7 @@ class CochleaWavSimulationMean(_SimulationBase):
             metadata_dict: dict = None,
             auto_parse: bool = False,
             parser_func = None
-            ):
-
-
+    ):
         super().__init__(config)
         self.wav_files = wav_files
 
@@ -85,20 +83,18 @@ class CochleaWavSimulationMean(_SimulationBase):
             logger.info(f"Auto-parsed metadata for {len(self.metadata_dict)} files")
 
         else:
-            # No metadata - just juse empty dicts
+            # No metadata - just use empty dicts
             self.metadata_dict = {}
             logger.info("No metadata provided - will save empty metadata dicts")
 
-        logger.info(f"Initialized zilany2014 WavSimulation with {len(wav_files)} files")
-
+        logger.info(f"Initialized zilany2014 WAV PSTH Simulation with {len(wav_files)} files")
 
     def setup_output_folder(self):
-        """Setup output folder - delegates logging to base class."""
-        # Create simple folder for WAV files
-
+        """Setup output folder for WAV PSTH processing."""
+        # Create folder with descriptive name
         timestamp = generate_timestamp()
         lsr, msr, hsr = self.config.num_ANF
-        folder_name = f"wav_{self.config.num_cf}cf_analyticalmeanrate_{len(self.wav_files)}files_{timestamp}"
+        folder_name = f"wav_{self.config.num_cf}cf_{lsr}-{msr}-{hsr}anf_psth_{len(self.wav_files)}files_{timestamp}"
 
         self.save_dir = Path(self.config.output_dir) / folder_name
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -107,25 +103,27 @@ class CochleaWavSimulationMean(_SimulationBase):
         # Use base class method for logging setup
         self._setup_logging_and_savers()
 
-        # Save configuration metadata (specific to WAV processing)
+        # Save configuration metadata
         config_metadata = {
-            'processing_type': 'wav_files',
+            'processing_type': 'wav_files_psth',
             'num_files': len(self.wav_files),
             'files': [p.name for p in self.wav_files],
             'peripheral_fs': self.config.peripheral_fs,
             'num_cf': self.config.num_cf,
+            'num_ANF': self.config.num_ANF,
             'anf_types': self.config.anf_types,
             'species': self.config.species,
             'cohc': self.config.cohc,
             'cihc': self.config.cihc,
+            'fs_target': self.config.fs_target,
         }
         self._save_metadata(config_metadata, 'simulation_config')
         logger.info("Saved configuration metadata")
 
     def run(self) -> Dict:
-        """Process all WAV files."""
+        """Process all WAV files with PSTH calculation."""
         logger.info("=" * 60)
-        logger.info("Starting WAV File Processing")
+        logger.info("Starting WAV File PSTH Processing")
         logger.info("=" * 60)
 
         start_time = time.time()
@@ -141,6 +139,10 @@ class CochleaWavSimulationMean(_SimulationBase):
 
             # Load and resample
             audio, fs = sf.read(wav_path)
+
+            # Ensure mono (convert stereo to mono if needed)
+            audio = ensure_mono(audio, logger)
+
             if fs != self.config.peripheral_fs:
                 logger.info(f"Resampling from {fs} Hz to {self.config.peripheral_fs} Hz")
                 audio = wv.resample(audio, fs, self.config.peripheral_fs)
@@ -148,11 +150,20 @@ class CochleaWavSimulationMean(_SimulationBase):
             # Get metadata
             metadata = self.metadata_dict.get(identifier, {})
 
-            # Process using process_wavfile
-            result = self.processor.process_wav_meanrate(audio, identifier, metadata)
+            # Process using process_wav_psth (NEW METHOD)
+            result = self.processor.process_wav_psth(audio, identifier, metadata)
 
-            # Calculate population rate
-            population_rate = calculate_population_rate(result['mean_rates'])
+            # Calculate population rate from PSTH
+            if result['psth'] is not None:
+                population_rate_psth = calculate_population_rate(result['psth'])
+            else:
+                population_rate_psth = None
+
+            # Also calculate from mean rates if available
+            if result['mean_rates'] is not None:
+                population_rate_mean = calculate_population_rate(result['mean_rates'])
+            else:
+                population_rate_mean = None
 
             # Organize results
             result_data = {
@@ -161,25 +172,26 @@ class CochleaWavSimulationMean(_SimulationBase):
                 'duration': result['duration'],
                 'fiber_types': list(self.config.anf_types),
                 'metadata': metadata,
-                'population_rate': population_rate,
+                'time_axis': result['time_axis'] if self.config.save_psth else None,
+                'population_rate_psth': population_rate_psth,
+                'population_rate_mean': population_rate_mean,
             }
 
             if self.config.save_mean_rates:
                 result_data['mean_rates'] = result['mean_rates']
 
-            # Note: process_wavfile uses rate model which doesn't produce PSTH
-            # time_axis and psth are not available for rate-based processing
+            if self.config.save_psth:
+                result_data['psth'] = result['psth']
 
             filename = f"{self.config.experiment_name}_{identifier}"
-            # Save immediately (use base class method)
+            # Save immediately
             self._save_single_result(result_data, filename)
 
-            # Store lightweight reference only (not full data)
-            # This allows iteration but doesn't consume RAM
+            # Store lightweight reference only
             self.results[identifier] = {
                 'soundfileid': identifier,
                 'saved_to': filename,
-                'cf_list': result_data['cf_list'],  # Small array, OK to keep
+                'cf_list': result_data['cf_list'],
             }
 
             # CRITICAL: Delete large data immediately after saving
@@ -187,14 +199,14 @@ class CochleaWavSimulationMean(_SimulationBase):
             gc.collect()
 
             stim_count += 1
-            logger.info(f"Completed: {identifier} (data saved (including population rates) & cleared from RAM)")
+            logger.info(f"Completed: {identifier} (PSTH data saved & cleared from RAM)")
 
-        # Save runtime info (use base class method)
+        # Save runtime info
         elapsed_time = time.time() - start_time
         self._save_runtime_info(elapsed_time, stim_count)
 
         logger.info(f"Processing completed in {elapsed_time:.2f} seconds")
-        logger.info(f"Processed {stim_count} stimuli")
+        logger.info(f"Processed {stim_count} WAV files with PSTH")
         logger.info(f"Results saved to: {self.save_dir}")
         logger.info("=" * 60)
 

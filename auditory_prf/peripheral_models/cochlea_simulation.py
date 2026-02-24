@@ -12,10 +12,10 @@ All classes can still be imported from this module for backward compatibility.
 """
 
 # Re-export all classes for backward compatibility
-from peripheral_models.simulation_base import _SimulationBase
-from peripheral_models.tone_simulation import CochleaSimulation
-from peripheral_models.wav_simulation_mean import CochleaWavSimulationMean
-from peripheral_models.wav_simulation_psth import CochleaWavSimulation
+from auditory_prf.peripheral_models.simulation_base import _SimulationBase
+from auditory_prf.peripheral_models.tone_simulation import CochleaSimulation
+from auditory_prf.peripheral_models.wav_simulation_mean import CochleaWavSimulationMean
+from auditory_prf.peripheral_models.wav_simulation_psth import CochleaWavSimulation
 
 # Make classes available when importing *
 __all__ = [
@@ -26,8 +26,8 @@ __all__ = [
 ]
 
 # Import additional dependencies needed for the test block
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.tone_config import ToneConfig
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.tone_config import ToneConfig
 
 # ================= Testing ================
 # For the soundgen using simulation

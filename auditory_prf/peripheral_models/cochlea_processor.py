@@ -16,8 +16,8 @@ from cochlea.zilany2014 import run_zilany2014_rate
 import thorns as th
 import thorns.waves as wv
 
-from peripheral_models.cochlea_config import CochleaConfig
-from utils.calculate_population_rate import calculate_population_rate
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.utils.calculate_population_rate import calculate_population_rate
 
 
 logger = logging.getLogger(__name__)

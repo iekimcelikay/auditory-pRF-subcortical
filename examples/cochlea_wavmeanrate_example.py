@@ -1,11 +1,8 @@
-import sys
 from pathlib import Path
 
-# Add parent directory to path to import peripheral_models
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from peripheral_models.cochlea_config import CochleaConfig
-from peripheral_models.cochlea_simulation import CochleaWavSimulation
+from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
+from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulation
 
 
 def main():

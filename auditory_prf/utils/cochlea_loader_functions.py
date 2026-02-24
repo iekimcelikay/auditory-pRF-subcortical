@@ -2,13 +2,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path.cwd().parent))
 # Project imports
-from utils.misc_functions import find_latest_results_folder
-from utils.result_saver import ResultSaver
-from utils.calculate_population_rate import calculate_population_rate
+from auditory_prf.utils.misc_functions import find_latest_results_folder
+from auditory_prf.utils.result_saver import ResultSaver
+from auditory_prf.utils.calculate_population_rate import calculate_population_rate
 
 #  Define paths
 
@@ -128,7 +126,6 @@ def organize_for_eachtone_allCFs(population_results, cf_list, target_db):
 # test passed. functions are working when alone in this script. 28.01.2026
 
 def main():
-    # Add parent directory to path
 
     input_dir = Path(__file__).parent.parent / "models_output" / "cochlea_test015_approximate"
 
