@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
-
-# Add parent directory to path to import peripheral_models
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import os
 
 from peripheral_models.cochlea_config import CochleaConfig
 from peripheral_models.cochlea_simulation import CochleaWavSimulation
+
+PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
 
 def custom_parser(filename:str) -> dict:
     """Parse custon filename format: sequence01_fc440hz_dur200ms_isi100ms_total5sec_numtones1.wav """
@@ -31,14 +31,14 @@ def main():
         peripheral_fs=100000,
         min_cf=125,
         max_cf=2500,
-        num_cf=20,
+        num_cf=40,
         num_ANF=(128, 128, 128),
         powerlaw = 'approximate',
         seed = 0,
         fs_target = 1000.0,
 
         # Output settings
-        output_dir = "./models_output/cochlea_wavfiles_120226_05",
+        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_240226_01"),
         experiment_name="customsequences_test05",
         save_formats=['npz'],
         save_mean_rates=False,
@@ -51,7 +51,7 @@ def main():
 
     # Get WAV files
 
-    wav_dir = Path("./stimuli/produced")
+    wav_dir = PROJECT_ROOT / "stimuli" / "produced"
     wav_files = sorted(wav_dir.glob("*.wav"))
 
     if not wav_files:
