@@ -38,7 +38,7 @@ def main():
 
         # Output settings
         output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_240226_01"),
-        experiment_name="dipc_fullmodeltest_01",
+        experiment_name="dipc_fullmodeltest_02",
         save_formats=['npz'],
         save_mean_rates=False,
         save_psth=True,
@@ -51,7 +51,7 @@ def main():
     # Get WAV files
 
     wav_dir = PROJECT_ROOT / "stimuli" / "produced"
-    wav_files = sorted(wav_dir.glob("sequence02_fc440hz_dur200ms_isi100ms_total1.0sec_numtones3.wav"))
+    wav_files = sorted(wav_dir.glob("sequence03_fc125hz_dur267ms_isi67ms_total5.0sec_numtones15.wav"))
 
     if not wav_files:
         print(f"No WAV files found in {wav_dir}")
