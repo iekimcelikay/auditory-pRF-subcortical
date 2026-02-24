@@ -29,8 +29,6 @@ build/
 # Outputs
 outputs/
 models_output/
-
-stimuli/produced/
 *.npz
 *.mat
 *.pkl
