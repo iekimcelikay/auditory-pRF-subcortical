@@ -11,6 +11,10 @@
 #SBATCH --mail-type=ALL           # Notifications for job done or fail
 #SBATCH --mail-user=e.celikay@bcbl.eu # Email address for notifications
 
+
+module load Miniforge3
+module load DCRAB/2.0
+
 # Activate conda environment
 conda strf3.9
 
