@@ -13,10 +13,10 @@
 
 
 module load Miniforge3
-module load DCRAB/2.0
+
 
 # Activate conda environment
-conda strf3.9
+conda activate strf3.9
 
 # ---- Environment Setup --
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
