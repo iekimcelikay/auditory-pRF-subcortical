@@ -2,6 +2,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+import sys
+from typing import Optional, Tuple
+
 
 # Project imports
 from auditory_prf.utils.misc_functions import find_latest_results_folder
@@ -121,6 +124,26 @@ def organize_for_eachtone_allCFs(population_results, cf_list, target_db):
     print(f"  - dB level: {target_db}")
 
     return response_matrix, tone_freqs
+
+
+def resolve_results_dir(path: Optional[Path]) -> Path:
+    """Return the directory that actually contains .npz files."""
+    if path is None:
+        path = DEFAULT_BASE_DIR
+
+    path = path.expanduser().resolve()
+    if not path.exists():
+        sys.exit(f"ERROR: path does not exist: {path}")
+
+    # If the path itself contains .npz files, use it directly
+    if list(path.glob("*.npz")):
+        return path
+
+    # Otherwise descend into the most-recently modified sub-directory
+    subdirs = [d for d in path.iterdir() if d.is_dir()]
+    if not subdirs:
+        sys.exit(f"ERROR: no sub-directories found in {path}")
+    return max(subdirs, key=lambda d: d.stat().st_mtime)
 
 # Test:
 # test passed. functions are working when alone in this script. 28.01.2026
