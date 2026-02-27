@@ -141,15 +141,16 @@ def plot_timecourse_per_cf(
     cf_list,
     identifier="",
     save_dir=None,
-    dpi=300,
-    figsize=(18, 4),
+    dpi=150,
+    figsize=(12, 4),
     tone_markers=None,
+    close_after_save=False,
 ):
     """Plot the firing-rate time course for each CF in a separate high-quality figure.
 
     Each figure spans the full stimulus duration with the x-axis in milliseconds.
-    Tick marks every 10 ms; labels every 50 ms.  Optional red vertical lines mark
-    tone onsets (solid) and offsets (dashed) for inspection of silence periods.
+    Labels every 50 ms (long ticks); 10 ms minor tick marks (short); no 5 ms grid.
+    Optional red vertical lines mark tone onsets (solid) and offsets (dashed).
 
     Args:
         time_axis (array-like): 1-D array of time points in **seconds**.
@@ -158,9 +159,9 @@ def plot_timecourse_per_cf(
         identifier (str): String identifier used in titles and file names.
         save_dir (Path | str | None): Directory where figures are saved.
             Created automatically if it does not exist. Pass None to skip saving.
-        dpi (int): Resolution in dots per inch (default 300 for high quality).
+        dpi (int): Resolution in dots per inch (default 150).
         figsize (tuple): Figure size (width, height) in inches.
-            Default (18, 4) gives a wide, detailed view of the time course.
+            Default (12, 4) suits 1.5 s sequences at 150 dpi.
         tone_markers (tuple | None): If provided, a tuple ``(tone_dur_ms, isi_ms)``
             used to compute and draw red vertical lines at every tone onset (solid)
             and offset (dashed) across the full time axis.
@@ -203,11 +204,12 @@ def plot_timecourse_per_cf(
         if len(onsets_ms) or len(offsets_ms):
             ax.legend(fontsize=8, loc="upper right", framealpha=0.7)
 
-        # ── x-axis: tick marks every 10 ms, labels every 50 ms ─────────────────
+        # ── x-axis: labels every 50 ms / marks every 10 ms / texture every 1 ms ──
         ax.set_xlim(time_ms[0], total_ms)
-        ax.xaxis.set_major_locator(MultipleLocator(50))   # labeled every 50 ms
-        ax.xaxis.set_minor_locator(MultipleLocator(10))   # tick mark every 10 ms
-        ax.tick_params(axis="x", which="major", length=5, labelsize=7.5)
+        ax.xaxis.set_major_locator(MultipleLocator(50))   # labeled tick every 50 ms (long)
+        ax.xaxis.set_minor_locator(MultipleLocator(10))   # unlabeled tick every 10 ms (short)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{round(x)}"))
+        ax.tick_params(axis="x", which="major", length=7, labelsize=7.5)
         ax.tick_params(axis="x", which="minor", length=3, labelsize=0)
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
@@ -226,8 +228,8 @@ def plot_timecourse_per_cf(
         ax.set_title(title, fontsize=12, fontweight="bold")
 
         # ── grid ────────────────────────────────────────────────────────────────
-        ax.grid(True, which="major", alpha=0.3, linestyle="--", linewidth=0.5)  # every 50 ms
-        ax.grid(True, which="minor", alpha=0.1, linestyle=":",  linewidth=0.3)  # every 10 ms
+        ax.grid(True, which="major", alpha=0.25, linestyle="--", linewidth=0.5)  # every 50 ms
+        ax.grid(True, which="minor", alpha=0.35, linestyle=":",  linewidth=0.4)  # every 10 ms
 
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)

@@ -19,6 +19,7 @@ mode to keep memory usage flat.
 """
 
 import argparse
+import gc
 import re
 import sys
 from pathlib import Path
@@ -33,12 +34,23 @@ from auditory_prf.visualization.plot_cochlea_output import plot_timecourse_per_c
 
 
 # ── defaults ────────────────────────────────────────────────────────────────
-DEFAULT_BASE_DIR = Path("./models_output/dipc_test_240226_03")
-DEFAULT_OUT_DIR = Path("./figures")
+EXP_NAME = "dipc_test_250225_01"   # ← change this when running from the IDE
+
+DEFAULT_BASE_DIR = Path(f"./models_output/{EXP_NAME}")
+DEFAULT_OUT_DIR  = Path(f"./figures/{EXP_NAME}")
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="Save per-CF PSTH time-course figures for every stimulus in a results folder."
+    )
+    p.add_argument(
+        "--exp_name",
+        type=str,
+        default=EXP_NAME,
+        help=(
+            f"Experiment name. Defaults to '{EXP_NAME}' (set at top of script). "
+            "Overrides DEFAULT_BASE_DIR and DEFAULT_OUT_DIR when provided."
+        ),
     )
     p.add_argument(
         "--results_dir",
@@ -61,8 +73,8 @@ def parse_args():
     )
     p.add_argument("--dpi",     type=int,   default=150,      help="Figure resolution (default 150).")
     p.add_argument("--figsize", type=float, nargs=2,
-                   default=[18, 4], metavar=("W", "H"),
-                   help="Figure width and height in inches (default 18 4).")
+                   default=[12, 4], metavar=("W", "H"),
+                   help="Figure width and height in inches (default 12 4).")
     return p.parse_args()
 
 
@@ -103,7 +115,12 @@ def resolve_results_dir(path: Optional[Path]) -> Path:
 def main():
     args = parse_args()
 
-    results_dir = resolve_results_dir(args.results_dir)
+    # Derive paths from exp_name (CLI value overrides the module-level default)
+    base_dir        = Path(f"./models_output/{args.exp_name}")
+    out_dir_default = Path(f"./figures/{args.exp_name}")
+
+    results_dir = resolve_results_dir(args.results_dir if args.results_dir is not None else base_dir)
+    print(f"Experiment        : {args.exp_name}")
     print(f"Results directory : {results_dir}")
 
     npz_files = sorted(results_dir.glob("*.npz"))
@@ -111,7 +128,7 @@ def main():
         sys.exit(f"ERROR: no .npz files found in {results_dir}")
     print(f"Found {len(npz_files)} .npz file(s)\n")
 
-    out_dir = args.out_dir if args.out_dir is not None else DEFAULT_OUT_DIR
+    out_dir = args.out_dir if args.out_dir is not None else out_dir_default
     out_dir = out_dir.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory  : {out_dir}\n")
@@ -147,11 +164,14 @@ def main():
             tone_markers    = tone_markers,
         )
 
-        # Close every figure immediately – nothing is displayed
+        # Close every figure and free all loaded arrays before the next file
+        n_cf = len(cf_list)
         for fig in figs:
             plt.close(fig)
+        del data, population_psth, time_axis, cf_list, identifier, figs
+        gc.collect()
 
-    total = len(npz_files) * len(cf_list)
+    total = len(npz_files) * n_cf
     print(f"\nDone. {total} figure(s) saved to:\n  {out_dir}")
 
 
@@ -171,4 +191,4 @@ if __name__ == "__main__":
 #    --results_dir models_output/dipc_test_240226_02 \
 #    --out_dir figures/per_cf \
 #    --dpi 150 \
-#    --figsize 22 4
+#    --figsize 22 4/home/ekim/auditory-pRF-subcortical/auditory_prf/visualization/plot_cochlea_output.py:191: RuntimeWarning: More than 20 figures have been opened. Figures created through the pyplot interface (`matplotlib.pyplot.figure`) are retained until explicitly closed and may consume too much memory. (To control this warning, see the rcParam `figure.max_open_warning`). Consider using `matplotlib.pyplot.close()`."Returns to baseline" needs a criterion — you could define it as when the rate drops below baseline + N×SD of the baseline, where N=1 or 2. This handles the noisy 1 ms bins gracefully.
