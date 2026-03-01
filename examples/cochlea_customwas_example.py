@@ -31,14 +31,14 @@ def main():
         min_cf=125,
         max_cf=2500,
         num_cf=40,
-        num_ANF=(512, 512, 512),
+        num_ANF=(128, 128, 128),
         powerlaw = 'approximate',
         seed = 0,
         fs_target = 1000.0,
 
         # Output settings
-        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_250225_01"),
-        experiment_name="dipc_isi133ms_512ANF",
+        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_280226_01"),
+        experiment_name="dipc_isi133ms_128ANF",
         save_formats=['npz'],
         save_mean_rates=False,
         save_psth=True,
