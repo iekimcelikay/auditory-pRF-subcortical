@@ -2,6 +2,8 @@ import numpy as np
 import sys
 from pathlib import Path
 
+from auditory_prf.utils.result_saver import ResultSaver
+
 def get_cf_timecourse(data: dict, cf) -> tuple[np.ndarray, int, float]:
     """Extract a single 1-D PSTH timecourse from a loaded .npz data dict.
 
