@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.visualization.plot_cochlea_output import plot_timecourse_per_cf
-
+from auditory_prf.utils.cochlea_loader_functions import resolve_results_dir
 
 # ── defaults ────────────────────────────────────────────────────────────────
 EXP_NAME = "dipc_test_250225_01"   # ← change this when running from the IDE
@@ -92,24 +92,6 @@ def parse_tone_timing(identifier: str) -> Optional[Tuple[float, float]]:
     return None
 
 
-def resolve_results_dir(path: Optional[Path]) -> Path:
-    """Return the directory that actually contains .npz files."""
-    if path is None:
-        path = DEFAULT_BASE_DIR
-
-    path = path.expanduser().resolve()
-    if not path.exists():
-        sys.exit(f"ERROR: path does not exist: {path}")
-
-    # If the path itself contains .npz files, use it directly
-    if list(path.glob("*.npz")):
-        return path
-
-    # Otherwise descend into the most-recently modified sub-directory
-    subdirs = [d for d in path.iterdir() if d.is_dir()]
-    if not subdirs:
-        sys.exit(f"ERROR: no sub-directories found in {path}")
-    return max(subdirs, key=lambda d: d.stat().st_mtime)
 
 
 def main():

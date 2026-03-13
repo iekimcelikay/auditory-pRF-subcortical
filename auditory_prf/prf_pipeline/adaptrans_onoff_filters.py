@@ -89,7 +89,8 @@ def apply_adaptrans(an_output: np.ndarray,
                     dt_ms: float,
                     w: float = 0.8,
                     K: int = None,
-                    rectify: bool = True) -> np.ndarray:
+                    rectify: bool = True,
+                    pad_value: float = None) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
 
@@ -109,6 +110,11 @@ def apply_adaptrans(an_output: np.ndarray,
         3x the longest time constant across all CFs.
     rectify : bool
         Half-wave rectify output (ReLU). Default True.
+    pad_value : float or None
+        Value used to pad the left edge of each channel before convolution.
+        If None (default), replicates signal[0] of each channel (standard
+        causal padding). Pass 0.0 for isolated per-tone signals that start
+        with non-zero amplitude at t=0 to avoid suppressing the first onset.
 
     Returns
     -------
@@ -136,9 +142,10 @@ def apply_adaptrans(an_output: np.ndarray,
         kernel_ON  = build_ON_kernel(a_vals[i], w, K)
         kernel_OFF = build_OFF_kernel(a_vals[i], w, K)
 
-        # causal padding: replicate first sample to avoid onset artifact
+        # causal padding: use pad_value if given, else replicate first sample
         signal = an_output[i]
-        padded = np.concatenate([np.full(K - 1, signal[0]), signal])
+        fill   = signal[0] if pad_value is None else pad_value
+        padded = np.concatenate([np.full(K - 1, fill), signal])
 
         out_ON[i]  = np.convolve(padded, kernel_ON[::-1],  mode='valid')[:T]
         out_OFF[i] = np.convolve(padded, kernel_OFF[::-1], mode='valid')[:T]
@@ -185,3 +192,142 @@ def preprocess_AN_output(an_output: np.ndarray,
     on_off      = apply_adaptrans(downsampled, CFs_Hz,
                                   dt_coarse_ms, w=w, K=K)      # (2, N_CFs, T_coarse)
     return on_off
+
+
+def build_prf_boxcar_train(
+    prf_responses: list,
+    onsets_ms: np.ndarray,
+    offsets_ms: np.ndarray,
+    total_dur_ms: float,
+    dt_ms: float = 1.0,
+) -> np.ndarray:
+    """
+    Build a 1-D boxcar impulse train from per-tone pRF response scalars.
+
+    Each tone's interval [onset, offset) in the output array is filled with
+    its corresponding prf_response amplitude. All other samples are zero.
+
+    Uses the **bare tone onset/offset times** (from result["onsets_ms"] and
+    result["offsets_ms"]) — the 50 ms chunk margin does NOT affect these.
+
+    Parameters
+    ----------
+    prf_responses : list of float
+        One scalar per tone (mean_rate_on × duration Gaussian), length N_tones.
+    onsets_ms : np.ndarray, shape (N_tones,)
+        Tone onset times in milliseconds.
+    offsets_ms : np.ndarray, shape (N_tones,)
+        Tone offset times in milliseconds.
+    total_dur_ms : float
+        Total duration of the stimulus in milliseconds. Determines output length.
+    dt_ms : float
+        Time step in milliseconds. Default 1.0 ms.
+
+    Returns
+    -------
+    train : np.ndarray, shape (ceil(total_dur_ms / dt_ms),)
+        Boxcar impulse train at dt_ms resolution.
+    """
+    import math
+    n_samples = math.ceil(total_dur_ms / dt_ms)
+    train = np.zeros(n_samples)
+
+    for s, (on, off, amp) in enumerate(zip(onsets_ms, offsets_ms, prf_responses)):
+        i_on  = round(on  / dt_ms)
+        i_off = round(off / dt_ms)
+        # clamp to valid range
+        i_on  = max(0, min(i_on,  n_samples))
+        i_off = max(0, min(i_off, n_samples))
+        train[i_on:i_off] = amp
+
+    return train
+
+
+def build_prf_impulse_train(
+    prf_responses: list,
+    onsets_ms: np.ndarray,
+    total_dur_ms: float,
+    dt_ms: float = 1.0,
+) -> np.ndarray:
+    """
+    Build a 1-D impulse train from per-tone pRF response scalars.
+
+    Each tone contributes a single delta spike at its onset sample, matching:
+
+        x[n] = sum_s  prf_response[s] * delta[n - n_s^onset]
+
+    so that convolving with h_ON gives:
+
+        output[n] = sum_s  prf_response[s] * h_ON[n - n_s^onset]
+
+    Parameters
+    ----------
+    prf_responses : list of float
+        One scalar per tone, length N_tones.
+    onsets_ms : np.ndarray, shape (N_tones,)
+        Tone onset times in milliseconds.
+    total_dur_ms : float
+        Total duration of the stimulus in milliseconds.
+    dt_ms : float
+        Time step in milliseconds. Default 1.0 ms.
+
+    Returns
+    -------
+    train : np.ndarray, shape (ceil(total_dur_ms / dt_ms),)
+        Impulse train at dt_ms resolution.
+    """
+    import math
+    n_samples = math.ceil(total_dur_ms / dt_ms)
+    train = np.zeros(n_samples)
+
+    for amp, on in zip(prf_responses, onsets_ms):
+        i_on = round(on / dt_ms)
+        i_on = max(0, min(i_on, n_samples - 1))
+        train[i_on] += amp  # accumulate in case two onsets round to same sample
+
+    return train
+
+def build_prf_impulse_train(
+    prf_responses: list,
+    onsets_ms: np.ndarray,
+    total_dur_ms: float,
+    dt_ms: float = 1.0,
+) -> np.ndarray:
+    """
+    Build a 1-D impulse train from per-tone pRF response scalars.
+
+    Each tone contributes a single spike at its onset sample, scaled by its
+    prf_response amplitude. This matches the mathematical definition:
+
+        x[n] = sum_s  prf_response[s] * delta[n - n_s^onset]
+
+    so that convolving with h_ON gives:
+
+        output[n] = sum_s  prf_response[s] * h_ON[n - n_s^onset]
+
+    Parameters
+    ----------
+    prf_responses : list of float
+        One scalar per tone, length N_tones.
+    onsets_ms : np.ndarray, shape (N_tones,)
+        Tone onset times in milliseconds.
+    total_dur_ms : float
+        Total duration of the stimulus in milliseconds.
+    dt_ms : float
+        Time step in milliseconds. Default 1.0 ms.
+
+    Returns
+    -------
+    train : np.ndarray, shape (ceil(total_dur_ms / dt_ms),)
+        Impulse train at dt_ms resolution.
+    """
+    import math
+    n_samples = math.ceil(total_dur_ms / dt_ms)
+    train = np.zeros(n_samples)
+
+    for amp, on in zip(prf_responses, onsets_ms):
+        i_on = round(on / dt_ms)
+        i_on = max(0, min(i_on, n_samples - 1))
+        train[i_on] += amp   # accumulate in case two onsets round to same sample
+
+    return train

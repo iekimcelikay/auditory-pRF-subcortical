@@ -26,6 +26,11 @@ __pycache__/
 dist/
 build/
 
+# LaTeX
+docs_latex/
+.latexmkrc
+
+
 # Outputs
 outputs/
 models_output/
@@ -48,3 +53,12 @@ Thumbs.db
 
 .ai-conventions
 .cursorrules
+
+# Claude
+.claude/
+CLAUDE.md
+/docs/superpowers
+
+#archive
+/archive
+/docs

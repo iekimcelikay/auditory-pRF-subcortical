@@ -9,6 +9,7 @@
 # sigma_duration = sigma_tau0
 
 
+import math
 import numpy as np
 import sys
 from pathlib import Path
@@ -19,12 +20,15 @@ import matplotlib.pyplot as plt
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
 from auditory_prf.utils.cochlea_loader_functions import load_cochlea_results, organize_for_eachtone_allCFs, resolve_results_dir
-from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_cf_timecourse
-from auditory_prf.prf_pipeline.powerlaw_function import apply_power_normalize, apply_powerlaw_cf
+from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_cf_timecourse, load_population_psth
+from auditory_prf.prf_pipeline.powerlaw_function import apply_power_normalize, apply_powerlaw_cf, apply_powerlaw_population
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 
 # Duration (scalar)
 from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_scalar
+
+# AdapTrans ON filter
+from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train, apply_adaptrans
 
 # ---- FUNCTIONS THAT ARE USED:
 # _____________________________________________________________________________
@@ -113,6 +117,8 @@ def run_pipeline(
         sigma_dur: float = 20.0,
         output_dir: Path = None,
         cf=10,
+        w: float = 0.8,
+        K: int = None,
 ):
 
     # --- Logging setup -----
@@ -141,12 +147,17 @@ def run_pipeline(
     for i, npz_path in enumerate(npz_files, 1):
         logger.info("[%d/%d] Processing: %s", i, len(npz_files), npz_path.name)
 
-        # 2. Extract CF timecourse
-        timecourse, time_axis, cf_index, cf_hz, seq_id = load_cf_timecourse(npz_path, cf)
+        # 2. Load full population PSTH (all CFs × all time bins)
+        population_psth, time_axis, cf_index, cf_hz, seq_id = load_population_psth(npz_path, cf)
         logger.debug("   CF index: %d | CF Hz: %.1f | seq_id: %s", cf_index, cf_hz, seq_id)
+        dt_s = time_axis[1] - time_axis[0]
+        total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
+        logger.debug("   total_dur_ms: %.1f ms | dt: %.4f ms", total_dur_ms, dt_s * 1000.0)
 
-        # 3. Apply power-law sharpening
-        sharpened = apply_powerlaw_cf(timecourse, alpha)
+        # 3. Apply power-law sharpening across all CFs, then extract target CF.
+        # Mean across all cochlear channels (all CFs × all time bins) is preserved.
+        sharpened_pop = apply_powerlaw_population(population_psth, alpha)
+        sharpened = sharpened_pop[cf_index, :]
         logger.debug("  Sharpened timecourse shape: %s", sharpened.shape)
 
         # DEBUG STEP _ DELETE LATER
@@ -177,8 +188,44 @@ def run_pipeline(
             ]
         logger.debug("  pRF responses(first 3): %s", prf_responses[:3])
 
+        # 6-7. Per-tone AdapTrans ON filter, then sum
+        #   For each tone s:
+        #     - build an isolated boxcar: zeros everywhere except [onset_s, offset_s)
+        #     - apply AdapTrans ON to that single-tone signal
+        #     - accumulate into on_response (superposition)
+        #   train is also accumulated (summed boxcar) for diagnostics/plotting.
+        n_1ms = math.ceil(total_dur_ms)
+        on_response = np.zeros(n_1ms)
+        train       = np.zeros(n_1ms)
+
+        for s, (prf_s, on_ms, off_ms) in enumerate(
+                zip(prf_responses, result["onsets_ms"], result["offsets_ms"])):
+
+            # isolated single-tone boxcar
+            single_train = build_prf_boxcar_train(
+                [prf_s], np.array([on_ms]), np.array([off_ms]),
+                total_dur_ms, dt_ms=1.0,
+            )
+            train += single_train   # accumulate for visualisation
+
+            # AdapTrans ON filter on this tone in isolation.
+            # pad_value=0.0 ensures silence is assumed before t=0,
+            # even for tone 1 which starts at t=0 (signal[0] = amp there).
+            on_off_s = apply_adaptrans(
+                single_train[np.newaxis, :],
+                CFs_Hz=np.array([cf_hz]),
+                dt_ms=1.0,
+                w=w,
+                K=K,
+                pad_value=0.0,
+            )
+            on_response += on_off_s[0, 0, :]   # superpose
+
+        logger.debug("  ON response (summed %d tones) shape: %s | min: %.4e | max: %.4e",
+                     n_tones, on_response.shape, on_response.min(), on_response.max())
+
     logger.info("Pipeline complete.")
-    return prf_responses
+    return {"prf_responses": prf_responses, "on_response": on_response, "train": train}
 
 
 if __name__ == "__main__":

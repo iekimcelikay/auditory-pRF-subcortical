@@ -87,3 +87,44 @@ def load_cf_timecourse(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, int,
     seq_id    = str(data.get("soundfileid", npz_path.stem))
 
     return timecourse, time_axis, cf_index, cf_hz, seq_id
+
+
+def load_population_psth(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, int, float, str]:
+    """Load the full population PSTH matrix from one .npz file, plus CF metadata.
+
+    Use this upstream of ``apply_powerlaw_population`` so that the
+    mean-preserving sharpening normalization is computed over all cochlear
+    channels (all CFs × all time bins) for a single stimulus sequence.
+
+    Parameters
+    ----------
+    npz_path : Path
+        Path to the .npz file for one stimulus sequence.
+    cf : int or float
+        CF selector passed through to ``get_cf_timecourse``:
+        * **int**   → zero-based row index.
+        * **float** → nearest CF in Hz.
+
+    Returns
+    -------
+    population_psth : np.ndarray, shape (n_cfs, n_bins)
+        Full raw PSTH matrix for all cochlear channels.
+    time_axis : np.ndarray, shape (n_bins,)
+        Time axis in seconds.
+    cf_index : int
+        Zero-based CF row index resolved from ``cf``.
+    cf_hz : float
+        Actual CF frequency in Hz for the selected row.
+    seq_id : str
+        Stimulus identifier (``soundfileid`` key, or the file stem as fallback).
+    """
+    npz_path = Path(npz_path)
+    saver    = ResultSaver(npz_path.parent)
+    data     = saver.load_npz(npz_path.name)
+
+    _, cf_index, cf_hz = get_cf_timecourse(data, cf)
+    population_psth = np.asarray(data["population_rate_psth"])   # (n_cfs, n_bins)
+    time_axis       = np.asarray(data["time_axis"])
+    seq_id          = str(data.get("soundfileid", npz_path.stem))
+
+    return population_psth, time_axis, cf_index, cf_hz, seq_id
