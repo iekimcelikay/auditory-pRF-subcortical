@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matplotlib Colormap Explorer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f5f5f3;
+    color: #1a1a1a;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1a; color: #e8e8e8; }
+    .card { background: #242424; border-color: rgba(255,255,255,0.1); }
+    select, input[type=range] { background: #2e2e2e; color: #e8e8e8; border-color: rgba(255,255,255,0.15); }
+    .copy-btn { background: transparent; color: #aaa; border-color: rgba(255,255,255,0.2); }
+    .copy-btn:hover { background: rgba(255,255,255,0.07); }
+    .cm-table th { color: #888; border-color: rgba(255,255,255,0.1); }
+    .cm-table tr:hover td { background: rgba(255,255,255,0.04); }
+    .table-wrap { border-color: rgba(255,255,255,0.1); }
+    .swatch { border-color: rgba(255,255,255,0.15); }
+    .section-label { color: #888; }
+    canvas#gradBar { border-color: rgba(255,255,255,0.1); }
+    .hover-info { color: #888; }
+    h1 { color: #e8e8e8; }
+    .subtitle { color: #888; }
+  }
+  .container { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #666; margin-bottom: 1.5rem; }
+  .card {
+    background: #fff;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 1.25rem; }
+  .control-group label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; }
+  select {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 0.5px solid rgba(0,0,0,0.18);
+    background: #fff;
+    min-width: 150px;
+    cursor: pointer;
+    outline: none;
+  }
+  select:focus { border-color: rgba(0,0,0,0.35); }
+  .slider-row { display: flex; align-items: center; gap: 8px; }
+  input[type=range] {
+    width: 130px;
+    cursor: pointer;
+    accent-color: #444;
+  }
+  .slider-val { font-size: 13px; font-weight: 500; min-width: 28px; }
+  .copy-btn {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    background: transparent;
+    border: 0.5px solid rgba(0,0,0,0.2);
+    color: #555;
+    transition: background 0.15s;
+  }
+  .copy-btn:hover { background: #f0f0ee; }
+  .section-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+  canvas#gradBar {
+    width: 100%;
+    height: 52px;
+    border-radius: 8px;
+    border: 0.5px solid rgba(0,0,0,0.08);
+    display: block;
+    cursor: crosshair;
+    margin-bottom: 0.5rem;
+  }
+  .hover-info {
+    font-size: 12px;
+    color: #666;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    min-height: 1.6em;
+    margin-bottom: 1rem;
+  }
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 1rem; }
+  .swatch {
+    width: 38px; height: 38px;
+    border-radius: 6px;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    position: relative;
+    cursor: default;
+  }
+  .swatch:hover .tip {
+    display: block;
+  }
+  .tip {
+    display: none;
+    position: absolute;
+    bottom: 44px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #fff;
+    border: 0.5px solid rgba(0,0,0,0.15);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+    color: #333;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .table-wrap {
+    max-height: 260px;
+    overflow-y: auto;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    border-radius: 8px;
+  }
+  .cm-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .cm-table th {
+    text-align: left;
+    padding: 5px 10px;
+    color: #666;
+    font-weight: 500;
+    border-bottom: 0.5px solid rgba(0,0,0,0.1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 11px;
+    position: sticky; top: 0;
+    background: #fff;
+  }
+  @media (prefers-color-scheme: dark) { .cm-table th { background: #242424; } }
+  .cm-table td { padding: 4px 10px; }
+  .cm-table tr:hover td { background: rgba(0,0,0,0.03); }
+  .swatch-cell { width: 22px; height: 22px; border-radius: 4px; display: inline-block; border: 0.5px solid rgba(0,0,0,0.1); vertical-align: middle; }
+  .divider { height: 0.5px; background: rgba(0,0,0,0.08); margin: 1rem 0; }
+  .code-block {
+    background: #f5f5f3;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: #333;
+    white-space: pre;
+    overflow-x: auto;
+    margin-top: 0.5rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    .code-block { background: #1a1a1a; color: #ccc; }
+    .tip { background: #2e2e2e; border-color: rgba(255,255,255,0.15); color: #ddd; }
+  }
+  .btn-row { display: flex; gap: 8px; margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Matplotlib Colormap Explorer</h1>
+  <p class="subtitle">Sample any colormap and get RGB values instantly</p>
+
+  <div class="card">
+    <div class="controls">
+      <div class="control-group">
+        <label>Colormap</label>
+        <select id="cmSel">
+          <optgroup label="Perceptual">
+            <option>viridis</option><option>plasma</option><option>inferno</option><option>magma</option><option>cividis</option>
+          </optgroup>
+          <optgroup label="Sequential">
+            <option>Blues</option><option>Greens</option><option>Reds</option><option>Purples</option><option>Oranges</option><option>YlOrRd</option><option>YlGnBu</option><option>BuPu</option>
+          </optgroup>
+          <optgroup label="Diverging">
+            <option>coolwarm</option><option>RdBu</option><option>PiYG</option><option>PRGn</option><option>seismic</option><option>bwr</option>
+          </optgroup>
+          <optgroup label="Qualitative">
+            <option>tab10</option><option>tab20</option><option>Set1</option><option>Set2</option><option>Set3</option><option>Pastel1</option>
+          </optgroup>
+          <optgroup label="Cyclic">
+            <option>hsv</option><option>twilight</option><option>twilight_shifted</option>
+          </optgroup>
+          <optgroup label="Misc">
+            <option>rainbow</option><option>jet</option><option>turbo</option><option>hot</option><option>spring</option><option>summer</option><option>autumn</option><option>winter</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Samples: <span id="nVal">16</span></label>
+        <div class="slider-row">
+          <input type="range" id="nSlider" min="4" max="64" value="16" step="1">
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">Gradient preview — hover to inspect</div>
+    <canvas id="gradBar"></canvas>
+    <div class="hover-info" id="hoverInfo">Hover over the gradient to see RGB values at any point</div>
+
+    <div class="section-label">Sampled swatches</div>
+    <div class="swatches" id="swatches"></div>
+
+    <div class="divider"></div>
+
+    <div class="section-label">RGB table</div>
+    <div class="table-wrap">
+      <table class="cm-table">
+        <thead>
+          <tr>
+            <th>#</th><th>Swatch</th><th>t</th><th>R</th><th>G</th><th>B</th><th>Hex</th><th>Float (R, G, B)</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section-label">Export</div>
+    <div class="btn-row">
+      <button class="copy-btn" id="copyPy">Copy as Python list</button>
+      <button class="copy-btn" id="copyCSV">Copy as CSV</button>
+      <button class="copy-btn" id="copyHex">Copy hex codes</button>
+    </div>
+    <div id="codePreview" class="code-block" style="margin-top:0.75rem;"></div>
+  </div>
+</div>
+
+<script>
+const COLORMAPS = {
+  viridis: [[68,1,84],[72,40,120],[62,83,161],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[110,206,88],[181,222,43],[253,231,37]],
+  plasma: [[13,8,135],[84,2,163],[139,10,165],[185,50,137],[219,92,104],[244,136,73],[254,188,43],[240,249,33]],
+  inferno: [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[252,185,26],[252,255,164]],
+  magma: [[0,0,4],[28,16,68],[79,18,123],[129,37,129],[181,54,122],[229,80,100],[251,135,97],[254,194,135],[252,253,191]],
+  cividis: [[0,32,76],[0,71,128],[56,107,149],[100,141,160],[146,172,156],[194,206,148],[244,232,127]],
+  coolwarm: [[59,76,192],[98,130,234],[172,192,250],[221,221,221],[246,182,162],[216,108,94],[180,4,38]],
+  RdBu: [[5,48,97],[33,102,172],[92,179,208],[209,229,240],[253,219,199],[214,96,77],[103,0,31]],
+  PiYG: [[142,1,82],[197,27,125],[222,119,174],[241,182,218],[253,224,239],[247,247,247],[230,245,208],[184,225,134],[127,188,65],[77,146,33],[39,100,25]],
+  PRGn: [[64,0,75],[118,42,131],[153,112,171],[194,165,207],[231,212,232],[247,247,247],[217,240,211],[166,219,160],[90,174,97],[27,120,55],[0,68,27]],
+  seismic: [[0,0,76],[0,0,255],[255,255,255],[255,0,0],[128,0,0]],
+  bwr: [[0,0,255],[255,255,255],[255,0,0]],
+  Blues: [[247,251,255],[198,219,239],[107,174,214],[33,113,181],[8,48,107]],
+  Greens: [[247,252,245],[199,233,192],[116,196,118],[35,139,69],[0,68,27]],
+  Reds: [[255,245,240],[252,174,145],[251,106,74],[203,24,29],[103,0,13]],
+  Purples: [[252,251,253],[218,218,235],[158,154,200],[106,81,163],[63,0,125]],
+  Oranges: [[255,245,235],[253,190,133],[253,141,60],[217,71,1],[127,39,4]],
+  YlOrRd: [[255,255,204],[254,217,118],[254,178,76],[253,141,60],[240,59,32],[189,0,38]],
+  YlGnBu: [[255,255,217],[199,233,180],[127,205,187],[65,182,196],[44,127,184],[37,52,148]],
+  BuPu: [[247,252,253],[224,236,244],[191,211,230],[158,188,218],[140,150,198],[136,86,167],[129,15,124]],
+  tab10: [[31,119,180],[255,127,14],[44,160,44],[214,39,40],[148,103,189],[140,86,75],[227,119,194],[127,127,127],[188,189,34],[23,190,207]],
+  tab20: [[31,119,180],[174,199,232],[255,127,14],[255,187,120],[44,160,44],[152,223,138],[214,39,40],[255,152,150],[148,103,189],[197,176,213],[140,86,75],[196,156,148],[227,119,194],[247,182,210],[127,127,127],[199,199,199],[188,189,34],[219,219,141],[23,190,207],[158,218,229]],
+  Set1: [[228,26,28],[55,126,184],[77,175,74],[152,78,163],[255,127,0],[255,255,51],[166,86,40],[247,129,191],[153,153,153]],
+  Set2: [[102,194,165],[252,141,98],[141,160,203],[231,138,195],[166,216,84],[255,217,47],[229,196,148],[179,179,179]],
+  Set3: [[141,211,199],[255,255,179],[190,186,218],[251,128,114],[128,177,211],[253,180,98],[179,222,105],[252,205,229],[217,217,217],[188,128,189],[204,235,197],[255,237,111]],
+  Pastel1: [[251,180,174],[179,205,227],[204,235,197],[222,203,228],[254,217,166],[255,255,204],[229,216,189],[253,218,236],[242,242,242]],
+  rainbow: [[148,0,211],[75,0,130],[0,0,255],[0,255,0],[255,255,0],[255,127,0],[255,0,0]],
+  jet: [[0,0,127],[0,0,255],[0,127,255],[0,255,255],[127,255,127],[255,255,0],[255,127,0],[255,0,0],[127,0,0]],
+  turbo: [[48,18,59],[86,109,248],[29,223,163],[220,220,10],[239,57,20]],
+  hot: [[0,0,0],[255,0,0],[255,255,0],[255,255,255]],
+  spring: [[255,0,255],[255,255,0]],
+  summer: [[0,128,102],[255,255,102]],
+  autumn: [[255,0,0],[255,255,0]],
+  winter: [[0,0,255],[0,255,128]],
+  hsv: [[255,0,0],[255,255,0],[0,255,0],[0,255,255],[0,0,255],[255,0,255],[255,0,0]],
+  twilight: [[226,217,226],[166,170,224],[100,120,196],[46,77,147],[27,44,88],[12,26,45],[19,49,83],[51,87,141],[106,138,195],[168,177,226],[219,218,228]],
+  twilight_shifted: [[114,60,115],[154,50,108],[188,64,93],[212,96,80],[228,140,83],[237,190,115],[239,230,155],[204,234,200],[145,210,221],[87,167,215],[55,120,192],[46,77,147],[50,44,100],[71,46,103]],
+};
+
+function lerp(c1, c2, t) {
+  return [
+    Math.round(c1[0] + (c2[0]-c1[0])*t),
+    Math.round(c1[1] + (c2[1]-c1[1])*t),
+    Math.round(c1[2] + (c2[2]-c1[2])*t),
+  ];
+}
+
+function sampleAt(name, t) {
+  const stops = COLORMAPS[name];
+  const pos = t * (stops.length - 1);
+  const lo = Math.floor(pos), hi = Math.min(lo+1, stops.length-1);
+  return lerp(stops[lo], stops[hi], pos - lo);
+}
+
+function sampleN(name, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(sampleAt(name, n===1 ? 0 : i/(n-1)));
+  return out;
+}
+
+function toHex([r,g,b]) {
+  return '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('');
+}
+
+const canvas = document.getElementById('gradBar');
+const ctx = canvas.getContext('2d');
+
+function drawGrad(name) {
+  canvas.width = canvas.offsetWidth * devicePixelRatio;
+  canvas.height = canvas.offsetHeight * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+  const stops = COLORMAPS[name];
+  const g = ctx.createLinearGradient(0,0,W,0);
+  stops.forEach((c,i) => g.addColorStop(i/(stops.length-1), `rgb(${c[0]},${c[1]},${c[2]})`));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.roundRect(0,0,W,H,8);
+  ctx.fill();
+}
+
+const cmSel = document.getElementById('cmSel');
+const nSlider = document.getElementById('nSlider');
+const nValEl = document.getElementById('nVal');
+const hoverInfo = document.getElementById('hoverInfo');
+const swatchesEl = document.getElementById('swatches');
+const tableBody = document.getElementById('tableBody');
+const codePreview = document.getElementById('codePreview');
+
+let name = 'viridis', n = 16, samples = [];
+
+function render() {
+  name = cmSel.value;
+  n = parseInt(nSlider.value);
+  nValEl.textContent = n;
+  drawGrad(name);
+  samples = sampleN(name, n);
+
+  swatchesEl.innerHTML = '';
+  samples.forEach((rgb, i) => {
+    const t = n===1 ? 0 : i/(n-1);
+    const d = document.createElement('div');
+    d.className = 'swatch';
+    d.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    d.innerHTML = `<span class="tip">t=${t.toFixed(2)} · rgb(${rgb.join(', ')})</span>`;
+    swatchesEl.appendChild(d);
+  });
+
+  tableBody.innerHTML = '';
+  samples.forEach((rgb, i) => {
+    const t = n===1 ? 0 : i/(n-1);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i}</td>
+      <td><span class="swatch-cell" style="background:rgb(${rgb[0]},${rgb[1]},${rgb[2]})"></span></td>
+      <td>${t.toFixed(3)}</td>
+      <td>${rgb[0]}</td><td>${rgb[1]}</td><td>${rgb[2]}</td>
+      <td>${toHex(rgb)}</td>
+      <td>(${(rgb[0]/255).toFixed(3)}, ${(rgb[1]/255).toFixed(3)}, ${(rgb[2]/255).toFixed(3)})</td>`;
+    tableBody.appendChild(tr);
+  });
+
+  updateCodePreview('py');
+}
+
+function getPyCode() {
+  const lines = samples.map((rgb,i) => {
+    const t = n===1 ? 0 : i/(n-1);
+    return `    (${t.toFixed(3)}, (${rgb[0]}, ${rgb[1]}, ${rgb[2]}))`;
+  });
+  return `# ${name} — ${n} samples\ncolors = [\n${lines.join(',\n')}\n]`;
+}
+
+function getCSV() {
+  const rows = ['index,t,R,G,B,hex'];
+  samples.forEach((rgb,i) => {
+    const t = n===1 ? 0 : i/(n-1);
+    rows.push(`${i},${t.toFixed(3)},${rgb[0]},${rgb[1]},${rgb[2]},${toHex(rgb)}`);
+  });
+  return rows.join('\n');
+}
+
+function getHex() {
+  return samples.map(rgb => toHex(rgb)).join('\n');
+}
+
+let activeMode = 'py';
+function updateCodePreview(mode) {
+  activeMode = mode;
+  if (mode === 'py') codePreview.textContent = getPyCode();
+  else if (mode === 'csv') codePreview.textContent = getCSV();
+  else if (mode === 'hex') codePreview.textContent = getHex();
+}
+
+function copyText(text, btn, label) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = label, 1500);
+  });
+}
+
+document.getElementById('copyPy').addEventListener('click', function() {
+  updateCodePreview('py');
+  copyText(getPyCode(), this, 'Copy as Python list');
+});
+document.getElementById('copyCSV').addEventListener('click', function() {
+  updateCodePreview('csv');
+  copyText(getCSV(), this, 'Copy as CSV');
+});
+document.getElementById('copyHex').addEventListener('click', function() {
+  updateCodePreview('hex');
+  copyText(getHex(), this, 'Copy hex codes');
+});
+
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  const t = (e.clientX - r.left) / r.width;
+  const [rv,g,b] = sampleAt(name, t);
+  hoverInfo.textContent = `t = ${t.toFixed(3)}   →   rgb(${rv}, ${g}, ${b})   ${toHex([rv,g,b])}   float (${(rv/255).toFixed(3)}, ${(g/255).toFixed(3)}, ${(b/255).toFixed(3)})`;
+});
+canvas.addEventListener('mouseleave', () => {
+  hoverInfo.textContent = 'Hover over the gradient to see RGB values at any point';
+});
+
+cmSel.addEventListener('change', render);
+nSlider.addEventListener('input', render);
+window.addEventListener('resize', () => drawGrad(name));
+render();
+</script>
+</body>
+</html>
