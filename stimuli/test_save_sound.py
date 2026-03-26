@@ -19,13 +19,13 @@ def test_soundsequence_save(out_path):
 
     fs = 100000
     soundgen = SoundGen(fs, 0.005)
-    fc = 440
+    fc = 2500
     num_harmonics=1
-    tone_duration=0.200
+    tone_duration=0.267
     harmonic_factor=1
     dbspl=60
-    total_duration=1.0
-    isi=0.100
+    total_duration=1.5
+    isi=0.133
 
     sequence = soundgen.generate_sequence(freq=fc, num_harmonics=num_harmonics, tone_duration=tone_duration,
                         harmonic_factor=harmonic_factor, dbspl=dbspl, total_duration=total_duration, isi=isi)
@@ -36,7 +36,7 @@ def test_soundsequence_save(out_path):
     out_path.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
     #sequence01_fc440hz_dur200ms_isi100ms_total5sec_numtones1.wav
-    out_file = out_path / f"sequence02_fc{fc}hz_dur{tone_duration*1000 :.0f}ms_isi{isi*1000 :.0f}ms_total{total_duration}sec_numtones{num_tones}.wav"
+    out_file = out_path / f"sequence17_fc{fc}hz_dur{tone_duration*1000 :.0f}ms_isi{isi*1000 :.0f}ms_total{total_duration}sec_numtones{num_tones}.wav"
 
     # Save without normalization so read-back matches closely
     save_sequence_as_wav(sequence, 100000, str(out_file), subtype="FLOAT")

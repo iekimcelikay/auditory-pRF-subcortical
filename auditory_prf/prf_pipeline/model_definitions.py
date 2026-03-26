@@ -15,6 +15,8 @@ def gaussian_duration(stim_dur, pref_dur, sigma_dur):
     return (1 / (np.sqrt(2 * np.pi) * sigma_dur)) * \
     np.exp(-(stim_dur - pref_dur)**2 / (2 * sigma_dur**2))
 
+def gaussian_duration_tuning(stim_dur, pref_dur, sigma_dur):
+    return np.exp(-(stim_dur - pref_dur)**2 / (2*sigma_dur**2))
 
 
 ### FINAL MODEL

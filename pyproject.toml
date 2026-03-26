@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auditory-prf"
+version = "0.1.0"
+description = "Auditory pRF subcortical modelling pipeline"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "soundfile",
+    "tables",
+    "thorns",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["auditory_prf*"]
+
+[tool.setuptools.package-data]
+"auditory_prf" = ["**/*.csv"]
