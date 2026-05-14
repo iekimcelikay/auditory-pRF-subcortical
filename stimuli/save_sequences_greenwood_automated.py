@@ -39,7 +39,7 @@ FREQ_RANGE       = (400.0, 1600, 3)   # (min_hz, max_hz, num_cfs)
 SPECIES          = 'human'               # 'human' or 'cat'
 
 # -- Stimulus parameters -------------------------------------------------------
-TONE_DURATION    = 0.075    # s  — duration of a single tone
+TONE_DURATION    = 0.500    # s  — duration of a single tone
 ISI              = 0.100    # s  — inter-stimulus interval
 TOTAL_DURATION   = 20      # s  — total sequence length
 DBSPL            = 60       # dB SPL
