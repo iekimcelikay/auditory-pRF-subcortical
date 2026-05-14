@@ -29,20 +29,14 @@ echo "==================================="
 # Load required modules
 module load Miniforge3
 
-# Initialize conda shell functions (required for conda activate in non-interactive SLURM)
-source /scicomp/builds/Rocky/8.7/Common/software/Miniforge3/24.11.3-2/etc/profile.d/conda.sh
-
-# Activate conda environment
-conda activate strf3.9
-python -c "import sys; print(sys.executable)"
-
 # ---- Environment Setup --
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 
 # Your command
 # Run the Python script
 cd $AUDITORY_PRF_ROOT
-python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py
+conda run -n strf3.9 python -c "import sys; print(sys.executable)"
+conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py
 
 # End of job
 echo "==================================="
