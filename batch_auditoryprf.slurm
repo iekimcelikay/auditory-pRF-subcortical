@@ -29,9 +29,12 @@ echo "==================================="
 # Load required modules
 module load Miniforge3
 
+# Initialize conda for non-interactive shell (required in SLURM)
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # Activate conda environment
 conda activate strf3.9
+python -c "import sys; print(sys.executable)"
 
 # ---- Environment Setup --
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
