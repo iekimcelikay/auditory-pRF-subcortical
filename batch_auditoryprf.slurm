@@ -29,6 +29,9 @@ echo "==================================="
 # Load required modules
 module load Miniforge3
 
+# Initialize conda shell functions (required for conda activate in non-interactive SLURM)
+source /scicomp/builds/Rocky/8.7/Common/software/Miniforge3/24.11.3-2/etc/profile.d/conda.sh
+
 # Activate conda environment
 conda activate strf3.9
 python -c "import sys; print(sys.executable)"
