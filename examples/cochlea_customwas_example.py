@@ -50,7 +50,7 @@ def main():
 
     # Get WAV files
 
-    wav_dir = PROJECT_ROOT / "stimuli" / "produced" / "_20260514_1849"
+    wav_dir = PROJECT_ROOT / "stimuli" / "produced" / "_20260514_2051"
     wav_files = sorted(wav_dir.glob("sequence*.wav"))
 
     if not wav_files:
