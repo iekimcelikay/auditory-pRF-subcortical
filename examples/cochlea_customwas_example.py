@@ -30,15 +30,15 @@ def main():
         peripheral_fs=100000,
         min_cf=125,
         max_cf=2500,
-        num_cf=40,
+        num_cf=30,
         num_ANF=(128, 128, 128),
         powerlaw = 'approximate',
         seed = 0,
         fs_target = 1000.0,
 
         # Output settings
-        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_280226_01"),
-        experiment_name="dipc_isi133ms_128ANF",
+        output_dir = str(PROJECT_ROOT / "models_output" / "dipc_test_280514_01"),
+        experiment_name="dipc_on75ms_isi100ms_128ANF",
         save_formats=['npz'],
         save_mean_rates=False,
         save_psth=True,
@@ -50,7 +50,7 @@ def main():
 
     # Get WAV files
 
-    wav_dir = PROJECT_ROOT / "stimuli" / "produced" / "_20260225_2044"
+    wav_dir = PROJECT_ROOT / "stimuli" / "produced" / "_20260514_1849"
     wav_files = sorted(wav_dir.glob("sequence*.wav"))
 
     if not wav_files:

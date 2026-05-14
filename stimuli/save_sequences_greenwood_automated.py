@@ -35,13 +35,13 @@ from save_sound import save_sequence_as_wav
 # ==============================================================================
 
 # -- Frequency / CF (mirrors ToneConfig.freq_range / CochleaConfig) -----------
-FREQ_RANGE       = (125.0, 2500.0, 40)   # (min_hz, max_hz, num_cfs)
+FREQ_RANGE       = (400.0, 1600, 3)   # (min_hz, max_hz, num_cfs)
 SPECIES          = 'human'               # 'human' or 'cat'
 
 # -- Stimulus parameters -------------------------------------------------------
-TONE_DURATION    = 0.267    # s  — duration of a single tone
-ISI              = 0.133    # s  — inter-stimulus interval
-TOTAL_DURATION   = 1.5      # s  — total sequence length
+TONE_DURATION    = 0.075    # s  — duration of a single tone
+ISI              = 0.100    # s  — inter-stimulus interval
+TOTAL_DURATION   = 20      # s  — total sequence length
 DBSPL            = 60       # dB SPL
 NUM_HARMONICS    = 1
 HARMONIC_FACTOR  = 1
