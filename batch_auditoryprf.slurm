@@ -3,13 +3,14 @@
 #SBATCH --qos=regular
 #SBATCH --job-name=auditory_prf
 #SBATCH --nodes=1
-#SBATCH --ntasks=1             # Single task (your Python script)
-#SBATCH --cpus-per-task=16      # CPUs for parallel data generation
-#SBATCH --mem-per-cpu=64G
-#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/test_auditoryprf_%j.out
-#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/test_auditoryprf_%j.err
-#SBATCH --mail-type=ALL           # Notifications for job done or fail
-#SBATCH --mail-user=e.celikay@bcbl.eu # Email address for notifications
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=350G
+#SBATCH --array=0-8
+#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/prf_%A_%a.out
+#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/prf_%A_%a.err
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=e.celikay@bcbl.eu
 
 # Print job information
 echo "==================================="
@@ -36,7 +37,7 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 # Run the Python script
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
-conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py
+conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py --wav-index $SLURM_ARRAY_TASK_ID
 
 # End of job
 echo "==================================="
