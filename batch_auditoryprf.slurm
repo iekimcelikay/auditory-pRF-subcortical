@@ -4,8 +4,8 @@
 #SBATCH --job-name=auditory_prf
 #SBATCH --nodes=1
 #SBATCH --ntasks=1             # Single task (your Python script)
-#SBATCH --cpus-per-task=32      # CPUs for parallel data generation
-#SBATCH --mem-per-cpu=8G
+#SBATCH --cpus-per-task=64      # CPUs for parallel data generation
+#SBATCH --mem-per-cpu=30G
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/test_auditoryprf_%j.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/test_auditoryprf_%j.err
 #SBATCH --mail-type=ALL           # Notifications for job done or fail
