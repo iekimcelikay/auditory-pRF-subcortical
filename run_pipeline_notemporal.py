@@ -32,7 +32,7 @@ CF_INDICES  = list(range(30))
 ALPHA = 8.0
 
 # ── stimulus params (must match WAV files in RESULTS_DIR) ────────────────────
-ALL_DURATIONS    = (25, 75, 100, 150, 250, 300, 350, 400, 450, 500)  # ms
+ALL_DURATIONS    = (25, 75, 100, 250, 300, 350, 400, 450)  # ms — 8 fixed durations
 ISI_MS           = 100                  # ms — fixed for all conditions
 FREQ_RANGE       = (400, 1600, 3)       # matches fc400hz / fc830hz / fc1600hz
 TRIAL_DURATION_S = 20.0
@@ -42,7 +42,7 @@ NULL_FRACTION    = 0.25
 
 # ── run design params ─────────────────────────────────────────────────────────
 N_DESIGNS            = 5000
-N_CONDITIONS_PER_RUN = 8   # temporal conditions sampled per run (out of 10)
+N_CONDITIONS_PER_RUN = len(ALL_DURATIONS)  # all durations included every run
 BASE_SEED            = 42
 
 # ── HRF / BOLD ────────────────────────────────────────────────────────────────
