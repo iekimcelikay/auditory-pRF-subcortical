@@ -19,7 +19,7 @@ echo "Running on: $SLURM_NODELIST"
 echo "==================================="
 
 module load Miniforge3
-
+# try again
 # Prevent NumPy/OpenBLAS from spawning its own threads inside each worker process.
 # Without this, 8 Python workers × N numpy threads = massive oversubscription.
 export OMP_NUM_THREADS=1
