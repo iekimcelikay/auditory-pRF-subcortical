@@ -152,7 +152,23 @@ def generate_tone_generator(
             # Yield tuple of info and tone, so the caller receives it
             yield (db, freq, tone)
 
+def generate_trial_sequences(sound_gen, stimuli, num_harmonics,
+                             harmonic_factor, dbspl, total_duration=5.0):
 
+    for tone_on_ms, isi_ms, freq in stimuli:
+
+        if freq is None: # null trial = yield silence, no onsets
+            total_samples = int(total_duration * sound_gen.sample_rate)
+            sequence = np.zeros((2, total_samples))
+            yield (tone_on_ms, isi_ms, freq, sequence, [])
+            continue
+
+        sequence, rel_onsets = sound_gen.generate_sequence(
+            freq, num_harmonics, tone_on_ms, isi_ms, harmonic_factor,
+            dbspl, total_duration)
+
+
+        yield (tone_on_ms, isi_ms, freq, sequence, rel_onsets)
 def ensure_mono(audio, logger):
     """
     Convert stereo audio to mono if needed.

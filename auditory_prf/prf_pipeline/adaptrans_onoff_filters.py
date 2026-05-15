@@ -32,11 +32,11 @@ def tau_to_a(tau_ms: float, dt_ms: float) -> float:
 
 
 def willmore_tau(cf_hz: float) -> float:
-    """
-    Frequency-dependent time constant from Willmore et al. (2016).
-    tau(f) = 500 - 105 * log10(f_Hz)  [ms]
-    """
-    return 500.0 - 105.0 * np.log10(cf_hz)
+    # Original Willmore: cortical, 80-290ms range → too slow for subcortex
+    # return 500.0 - 105.0 * np.log10(cf_hz)
+
+    # Rescaled for subcortex: same shape, compressed to ~10-50ms range
+    return (500.0 - 105.0 * np.log10(cf_hz)) * 0.15
 
 
 def build_ON_kernel(a: float, w: float, K: int) -> np.ndarray:
@@ -60,8 +60,8 @@ def build_ON_kernel(a: float, w: float, K: int) -> np.ndarray:
     C = 1.0 / exp_terms.sum()         # normalization
 
     kernel = np.empty(K)
-    kernel[-1] = 1.0                   # current sample: +1
-    kernel[:-1] = -C * w * exp_terms  # past samples:   -C*w*a^i
+    kernel[0] = 1.0                   # current sample: +1
+    kernel[1:] = -C * w * exp_terms  # past samples:   -C*w*a^i
     return kernel
 
 
@@ -69,18 +69,30 @@ def build_OFF_kernel(a: float, w: float, K: int) -> np.ndarray:
     """
     FIR offset kernel for a single CF channel.
 
-    Derived from ON kernel: kernel_OFF = -kernel_ON / w, last tap = -w
-    Detects decreases relative to exponential average of recent past.
+    h_OFF[0]   = -w                        (current sample, discounted)
+    h_OFF[d]   = +C * a^(d-1)   d=1..K-1  (exponentially weighted past)
+
+    This is intentionally NOT the exact negative of h_ON. The asymmetry is
+    by design: ON discounts the *past* by w, OFF discounts the *present* by w.
+    See docs/pipeline_equations.md for the full derivation.
+
+    Algebraic shortcut used below:
+      -h_ON / w  gives taps d>=1:  -(-C*w*a^(d-1)) / w = +C*a^(d-1)  (correct)
+                 but   tap 0:      -(+1) / w            = -1/w         (wrong)
+      So tap 0 is overwritten with -w.
 
     Parameters
     ----------
     a : float in (0, 1)
+        Exponential decay rate. a = exp(-dt / tau)
     w : float in (0, 1)
+        Adaptation weight. Higher = stronger subtraction of present.
     K : int
+        Kernel length in samples.
     """
     on_kernel = build_ON_kernel(a, w, K)
     off_kernel = -on_kernel / w
-    off_kernel[-1] = -w
+    off_kernel[0] = -w
     return off_kernel
 
 
@@ -89,7 +101,7 @@ def apply_adaptrans(an_output: np.ndarray,
                     dt_ms: float,
                     w: float = 0.8,
                     K: int = None,
-                    rectify: bool = True,
+                    rectify: bool = False,
                     pad_value: float = None) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
@@ -109,7 +121,8 @@ def apply_adaptrans(an_output: np.ndarray,
         Kernel length in samples. If None, auto-set to cover
         3x the longest time constant across all CFs.
     rectify : bool
-        Half-wave rectify output (ReLU). Default True.
+        Half-wave rectify output (ReLU). Default False. #TODO: make it false.
+
     pad_value : float or None
         Value used to pad the left edge of each channel before convolution.
         If None (default), replicates signal[0] of each channel (standard
@@ -126,6 +139,7 @@ def apply_adaptrans(an_output: np.ndarray,
 
     # per-CF time constants and decay rates from Willmore et al.
     tau_vals = np.array([willmore_tau(cf) for cf in CFs_Hz])      # (N_CFs,) ms
+    print(f"Tau for this CF is: {tau_vals}")
     a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)
 
     # auto-set K to cover 3x the longest time constant if not specified
@@ -147,8 +161,22 @@ def apply_adaptrans(an_output: np.ndarray,
         fill   = signal[0] if pad_value is None else pad_value
         padded = np.concatenate([np.full(K - 1, fill), signal])
 
-        out_ON[i]  = np.convolve(padded, kernel_ON[::-1],  mode='valid')[:T]
-        out_OFF[i] = np.convolve(padded, kernel_OFF[::-1], mode='valid')[:T]
+        raw_ON  = np.convolve(padded, kernel_ON,  mode='valid')[:T]
+        raw_OFF = np.convolve(padded, kernel_OFF, mode='valid')[:T]
+
+        # ── ADD THIS ─────────────────────────────────────────────────
+        onset_idx = np.argmax(np.abs(np.diff(signal)) > 0)  # first transition
+        print(f"CF {CFs_Hz[i]:.0f} Hz | tau={tau_vals[i]:.1f}ms | K={K}")
+        print(f"  signal max:     {signal.max():.4e}")
+        print(f"  raw_ON  max:    {raw_ON.max():.4e}  at t={raw_ON.argmax()}")
+        print(f"  raw_ON  onset:  {raw_ON[onset_idx]:.4e}  (should be ≈ signal.max())")
+        off_idx = onset_idx + int((signal > 0).sum())
+        print(f"  raw_OFF offset: {raw_OFF[off_idx]:.4e}")
+        # ─────────────────────────────────────────────────────────────
+
+
+        out_ON[i]  = np.convolve(padded, kernel_ON,  mode='valid')[:T]
+        out_OFF[i] = np.convolve(padded, kernel_OFF, mode='valid')[:T]
 
     if rectify:
         out_ON  = np.maximum(out_ON,  0.0)
@@ -284,50 +312,5 @@ def build_prf_impulse_train(
         i_on = round(on / dt_ms)
         i_on = max(0, min(i_on, n_samples - 1))
         train[i_on] += amp  # accumulate in case two onsets round to same sample
-
-    return train
-
-def build_prf_impulse_train(
-    prf_responses: list,
-    onsets_ms: np.ndarray,
-    total_dur_ms: float,
-    dt_ms: float = 1.0,
-) -> np.ndarray:
-    """
-    Build a 1-D impulse train from per-tone pRF response scalars.
-
-    Each tone contributes a single spike at its onset sample, scaled by its
-    prf_response amplitude. This matches the mathematical definition:
-
-        x[n] = sum_s  prf_response[s] * delta[n - n_s^onset]
-
-    so that convolving with h_ON gives:
-
-        output[n] = sum_s  prf_response[s] * h_ON[n - n_s^onset]
-
-    Parameters
-    ----------
-    prf_responses : list of float
-        One scalar per tone, length N_tones.
-    onsets_ms : np.ndarray, shape (N_tones,)
-        Tone onset times in milliseconds.
-    total_dur_ms : float
-        Total duration of the stimulus in milliseconds.
-    dt_ms : float
-        Time step in milliseconds. Default 1.0 ms.
-
-    Returns
-    -------
-    train : np.ndarray, shape (ceil(total_dur_ms / dt_ms),)
-        Impulse train at dt_ms resolution.
-    """
-    import math
-    n_samples = math.ceil(total_dur_ms / dt_ms)
-    train = np.zeros(n_samples)
-
-    for amp, on in zip(prf_responses, onsets_ms):
-        i_on = round(on / dt_ms)
-        i_on = max(0, min(i_on, n_samples - 1))
-        train[i_on] += amp   # accumulate in case two onsets round to same sample
 
     return train
