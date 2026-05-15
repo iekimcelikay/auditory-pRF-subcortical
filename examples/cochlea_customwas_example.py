@@ -7,7 +7,8 @@ from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulati
 
 PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
 
-WAV_DIR = PROJECT_ROOT / "stimuli" / "produced" / "_20260514_2102"
+WAV_DIR = PROJECT_ROOT / "stimuli" / "produced" / "_20260516_0054"
+
 
 
 def custom_parser(filename: str) -> dict:
@@ -50,8 +51,8 @@ def main():
         powerlaw='approximate',
         seed=0,
         fs_target=1000.0,
-        output_dir=str(PROJECT_ROOT / "models_output" / "dipc_test_280514_01"),
-        experiment_name=f"dipc_on75ms_isi100ms_128ANF_wav{args.wav_index:03d}",
+        output_dir=str(PROJECT_ROOT / "models_output" / "dipc_test_20260516_0054"),
+        experiment_name=f"dipc_8conditions_isi100ms_128ANF_wav{args.wav_index:03d}",
         save_formats=['npz'],
         save_mean_rates=False,
         save_psth=True,
