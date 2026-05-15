@@ -35,12 +35,12 @@ from save_sound import save_sequence_as_wav
 # ==============================================================================
 
 # -- Frequency / CF (mirrors ToneConfig.freq_range / CochleaConfig) -----------
-FREQ_RANGE       = (400.0, 1600, 3)   # (min_hz, max_hz, num_cfs)
-SPECIES          = 'human'               # 'human' or 'cat'
+FREQ_RANGE       = (400, 1600, 3)    # (min_hz, max_hz, num_cfs)
+SPECIES          = 'human'            # 'human' or 'cat'
 
-# -- Stimulus parameters -------------------------------------------------------
-TONE_DURATION    = 0.500    # s  — duration of a single tone
-ISI              = 0.100    # s  — inter-stimulus interval
+# -- Stimulus parameters — sweep over all (duration, ISI) pairs ---------------
+TONE_ON_MS       = (25, 50, 75, 150, 250, 350, 400, 500)  # ms
+ISI_MS           = (100,) * len(TONE_ON_MS)                          # ms
 TOTAL_DURATION   = 20      # s  — total sequence length
 DBSPL            = 60       # dB SPL
 NUM_HARMONICS    = 1
@@ -65,45 +65,51 @@ def main() -> None:
     out_dir = BASE_OUT_DIR / f"{RUN_PREFIX}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate Greenwood-spaced CF array (identical to CochleaConfig / ToneConfig)
     cfs = calc_cfs(FREQ_RANGE, species=SPECIES)
-
     soundgen = SoundGen(SAMPLE_RATE, TAU_RAMP)
-    num_tones, _, _ = soundgen.calculate_num_tones(TONE_DURATION, ISI, TOTAL_DURATION)
 
-    print(f"Saving {len(cfs)} files to: {out_dir}")
-    print(f"  CFs : {cfs[0]:.1f} – {cfs[-1]:.1f} Hz  ({len(cfs)} Greenwood-spaced)")
-    print(f"  Sequence numbers: {START_SEQ_NUMBER} – {START_SEQ_NUMBER + len(cfs) - 1}")
+    total_files = len(TONE_ON_MS) * len(cfs)
+    print(f"Saving {total_files} files to: {out_dir}")
+    print(f"  CFs         : {cfs[0]:.1f} – {cfs[-1]:.1f} Hz  ({len(cfs)} Greenwood-spaced)")
+    print(f"  Durations   : {TONE_ON_MS} ms")
+    print(f"  ISIs        : {ISI_MS} ms")
     print()
 
-    for i, cf in enumerate(cfs):
-        seq_num = START_SEQ_NUMBER + i
+    seq_num = START_SEQ_NUMBER
+    file_count = 0
 
-        sequence = soundgen.generate_sequence(
-            freq=cf,
-            num_harmonics=NUM_HARMONICS,
-            tone_duration=TONE_DURATION,
-            harmonic_factor=HARMONIC_FACTOR,
-            dbspl=DBSPL,
-            total_duration=TOTAL_DURATION,
-            isi=ISI,
-            stereo=STEREO,
-        )
+    for tone_ms, isi_ms in zip(TONE_ON_MS, ISI_MS):
+        tone_s = tone_ms / 1000.0
+        isi_s  = isi_ms  / 1000.0
+        num_tones, _, _ = soundgen.calculate_num_tones(tone_s, isi_s, TOTAL_DURATION)
 
-        filename = (
-            f"sequence{seq_num:02d}"
-            f"_fc{cf:.0f}hz"
-            f"_dur{TONE_DURATION * 1000:.0f}ms"
-            f"_isi{ISI * 1000:.0f}ms"
-            f"_total{TOTAL_DURATION}sec"
-            f"_numtones{num_tones}.wav"
-        )
-        out_file = out_dir / filename
+        for cf in cfs:
+            sequence = soundgen.generate_sequence(
+                freq=cf,
+                num_harmonics=NUM_HARMONICS,
+                tone_duration=tone_s,
+                harmonic_factor=HARMONIC_FACTOR,
+                dbspl=DBSPL,
+                total_duration=TOTAL_DURATION,
+                isi=isi_s,
+                stereo=STEREO,
+            )
 
-        save_sequence_as_wav(sequence, SAMPLE_RATE, str(out_file), subtype=WAV_SUBTYPE)
-        print(f"  [{i + 1:>3}/{len(cfs)}] {filename}")
+            filename = (
+                f"sequence{seq_num:02d}"
+                f"_fc{cf:.0f}hz"
+                f"_dur{tone_ms}ms"
+                f"_isi{isi_ms}ms"
+                f"_total{TOTAL_DURATION}sec"
+                f"_numtones{num_tones}.wav"
+            )
+            save_sequence_as_wav(sequence, SAMPLE_RATE, str(out_dir / filename), subtype=WAV_SUBTYPE)
 
-    print(f"\nDone. Saved {len(cfs)} files to {out_dir}")
+            file_count += 1
+            print(f"  [{file_count:>3}/{total_files}] {filename}")
+            seq_num += 1
+
+    print(f"\nDone. Saved {file_count} files to {out_dir}")
 
 
 if __name__ == "__main__":
