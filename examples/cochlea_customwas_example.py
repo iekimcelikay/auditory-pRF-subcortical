@@ -7,7 +7,7 @@ from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulati
 
 PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
 
-WAV_DIR = PROJECT_ROOT / "stimuli" / "produced" / "_20260516_0054"
+WAV_DIR_DEFAULT = PROJECT_ROOT / "stimuli" / "produced" / "_20260516_0054"
 
 
 
@@ -28,15 +28,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wav-index", type=int, default=0,
                         help="Index of WAV file to process. Pass $SLURM_ARRAY_TASK_ID.")
+    parser.add_argument("--wav-dir", type=str, default=str(WAV_DIR_DEFAULT),
+                        help="Path to folder containing WAV files.")
     args = parser.parse_args()
 
-    all_wav_files = sorted(WAV_DIR.glob("sequence*.wav"))
+    wav_dir = Path(args.wav_dir)
+    all_wav_files = sorted(wav_dir.glob("sequence*.wav"))
     if not all_wav_files:
-        print(f"No WAV files found in {WAV_DIR}")
+        print(f"No WAV files found in {wav_dir}")
         return
 
     if args.wav_index >= len(all_wav_files):
-        print(f"wav_index {args.wav_index} out of range — only {len(all_wav_files)} files found in {WAV_DIR}")
+        print(f"wav_index {args.wav_index} out of range — only {len(all_wav_files)} files found in {wav_dir}")
         return
 
     wav_file = [all_wav_files[args.wav_index]]

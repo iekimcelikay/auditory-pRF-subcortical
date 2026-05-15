@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=350G
-#SBATCH --array=0-8
+#SBATCH --array=0-23
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/prf_%A_%a.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/prf_%A_%a.err
 #SBATCH --mail-type=ALL
@@ -37,7 +37,9 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 # Run the Python script
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
-conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py --wav-index $SLURM_ARRAY_TASK_ID
+conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py \
+    --wav-dir $AUDITORY_PRF_ROOT/stimuli/produced/_20260516_0054 \
+    --wav-index $SLURM_ARRAY_TASK_ID
 
 # End of job
 echo "==================================="
