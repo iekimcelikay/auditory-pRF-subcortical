@@ -12,6 +12,7 @@ Single CF (for SLURM array):
 """
 
 import argparse
+from datetime import datetime
 import numpy as np
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from auditory_prf.prf_pipeline.full_pipeline_notemporal import run_pipeline
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("./models_output/dipc_test_280514_01")
-OUTPUT_DIR  = Path("./output/prf_notemporal_280514")
+OUTPUT_DIR  = Path(f"./models_output/prf_notemporal_{datetime.now().strftime('%Y%m%d_%H%M')}")
 
 # ── cochlear CFs (indices into the 30-CF cochlear model) ──────────────────────
 CF_INDICES  = list(range(30))
@@ -40,7 +41,7 @@ ITI_RANGE_S      = (0, 0)
 NULL_FRACTION    = 0.25
 
 # ── run design params ─────────────────────────────────────────────────────────
-N_DESIGNS            = 1000
+N_DESIGNS            = 5000
 N_CONDITIONS_PER_RUN = 8   # temporal conditions sampled per run (out of 10)
 BASE_SEED            = 42
 

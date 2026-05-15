@@ -30,7 +30,7 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 cd $AUDITORY_PRF_ROOT
 
 RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/dipc_test_280514_01
-OUTPUT_DIR=$AUDITORY_PRF_ROOT/models_output/prf_notemporal
+OUTPUT_DIR=$AUDITORY_PRF_ROOT/models_output/prf_notemporal_$(date +%Y%m%d)_job${SLURM_ARRAY_JOB_ID}
 
 conda run -n strf3.9 python \
     $AUDITORY_PRF_ROOT/run_pipeline_notemporal.py \
