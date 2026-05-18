@@ -32,7 +32,6 @@ from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, convolve_hrf, SUBCOR
 from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_design, assemble_run_bold
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
-from auditory_prf.utils.cochlea_loader_functions import resolve_results_dir
 from auditory_prf.stimuli.soundgen import SoundGen
 
 logger = logging.getLogger(__name__)
@@ -115,13 +114,12 @@ def run_pipeline(
         console_level=logging.INFO,
     ).setup()
 
-    _results_dir = resolve_results_dir(
-        results_dir if results_dir is not None else DEFAULT_BASE_DIR
-    )
+    _results_dir = (results_dir if results_dir is not None else DEFAULT_BASE_DIR)
+    _results_dir = Path(_results_dir).expanduser().resolve()
     logger.info("Experiment       : %s", exp_name)
     logger.info("Results dir      : %s", _results_dir)
 
-    npz_files = sorted(_results_dir.glob("*.npz"))
+    npz_files = sorted(_results_dir.rglob("*.npz"))
     if not npz_files:
         logger.error("No .npz files found in %s", _results_dir)
         return {}

@@ -34,7 +34,7 @@ from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_
 
 # ── must match run_pipeline_notemporal.py ─────────────────────────────────────
 BASE_SEED            = 42
-ALL_DURATIONS        = (25, 75, 100, 250, 300, 350, 400, 450)
+ALL_DURATIONS        = (25, 50, 75, 150, 250, 350, 400, 500)
 ISI_MS               = 100
 FREQ_RANGE           = (400, 1600, 3)
 TRIAL_DURATION_S     = 20.0
