@@ -29,7 +29,7 @@ OUTPUT_DIR  = Path(f"./models_output/prf_notemporal_{datetime.now().strftime('%Y
 CF_INDICES  = list(range(30))
 
 # ── model params ──────────────────────────────────────────────────────────────
-ALPHA = 8.0
+ALPHA = 1.0
 
 # ── stimulus params (must match WAV files in RESULTS_DIR) ────────────────────
 ALL_DURATIONS    = (25, 50, 75, 150, 250, 350, 400, 500)  # ms — 8 fixed durations
