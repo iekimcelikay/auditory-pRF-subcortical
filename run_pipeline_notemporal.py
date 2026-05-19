@@ -40,7 +40,7 @@ ITI_RANGE_S      = (0, 0)
 NULL_FRACTION    = 0.25
 
 # ── run design params ─────────────────────────────────────────────────────────
-N_DESIGNS            = 5000
+N_DESIGNS            = 20
 N_CONDITIONS_PER_RUN = len(ALL_DURATIONS)  # all durations included every run
 BASE_SEED            = 42
 
@@ -50,7 +50,7 @@ TR_S            = 1.6
 
 
 def build_run_designs() -> list:
-    """Generate all 1000 run designs (shared across CFs)."""
+    """Generate all # run designs (shared across CFs)."""
     desired_freqs = calc_cfs(FREQ_RANGE, species='human')
     seq_id_fn     = make_seq_id_fn(FREQ_RANGE,
                                    tone_on_ms_options=ALL_DURATIONS,
