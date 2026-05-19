@@ -32,7 +32,7 @@ from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, convolve_hrf, SUBCOR
 from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_design, assemble_run_bold
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
-from auditory_prf.stimuli.soundgen import SoundGen
+from auditory_prf.utils.condition_map import SILENCE_SEQ_ID
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ EXP_NAME        = "dipc_test_250225_01"
 DEFAULT_BASE_DIR = Path(f"./models_output/{EXP_NAME}")
 
 # ── run design defaults ──────────────────────────────────────────────────────
-TONE_ON_MS      = (25, 50, 75, 100, 200, 250, 300, 350, 400, 450)
+TONE_ON_MS      = (30, 50, 75, 110, 150, 200, 350, 450)
 ISI_MS          = (100,) * len(TONE_ON_MS)
 FREQ_RANGE      = (400, 1600, 3)    # (min_hz, max_hz, num_cfs) Greenwood-spaced
 NULL_FRACTION   = 0.25
@@ -140,8 +140,9 @@ def run_pipeline(
     n_null        = int(np.floor(len(stimuli) * null_fraction / (1 - null_fraction)))
     base_trials   = stimuli + [(0, 0, None)] * n_null
 
-    sound_gen  = SoundGen(48000, tau=0.005)
-    seq_id_fn  = make_seq_id_fn(freq_range, trial_duration_s, sound_gen)
+    seq_id_fn  = make_seq_id_fn(freq_range,
+                                tone_on_ms_options=tuple(tone_on_ms),
+                                isi_ms_options=tuple(isi_ms))
     logger.info("Base trials: %d active + %d null = %d total",
                 len(stimuli), n_null, len(base_trials))
 
@@ -161,28 +162,50 @@ def run_pipeline(
         # power-law sharpening across all CFs, extract target CF
         sharpened = apply_powerlaw_population(population_psth, alpha)[cf_index, :]
 
-        # chunk into tone-ON windows
-        result, tone_dur_ms, isi_ms_val = chunk_from_id(sharpened, time_axis, seq_id)
-        mean_rates_on = [np.mean(c) for c in result["chunks"]]
+        if seq_id == SILENCE_SEQ_ID:
+            # silence: flat train at the spontaneous rate (mean over full duration)
+            spont_rate = float(np.mean(sharpened))
+            n_samples  = int(round(total_dur_ms))
+            train      = np.full(n_samples, spont_rate)
+            logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
+                         seq_id, cf_hz, spont_rate, len(train))
+        else:
+            # chunk into tone-ON windows
+            result, tone_dur_ms, isi_ms_val = chunk_from_id(sharpened, time_axis, seq_id)
+            mean_rates_on = [np.mean(c) for c in result["chunks"]]
 
-        # boxcar train: amplitude = raw mean rate (no duration Gaussian)
-        train = build_prf_boxcar_train(
-            mean_rates_on,
-            result["onsets_ms"],
-            result["offsets_ms"],
-            total_dur_ms,
-            dt_ms=1.0,
-        )
+            # boxcar train: amplitude = raw mean rate (no duration Gaussian)
+            train = build_prf_boxcar_train(
+                mean_rates_on,
+                result["onsets_ms"],
+                result["offsets_ms"],
+                total_dur_ms,
+                dt_ms=1.0,
+            )
+            logger.debug("  seq_id=%s | CF=%.0f Hz | %d tones | train len=%d",
+                         seq_id, cf_hz, len(mean_rates_on), len(train))
 
         per_seq[seq_id] = {
             "train":    train,
             "cf_hz":    cf_hz,
             "cf_index": cf_index,
         }
-        logger.debug("  seq_id=%s | CF=%.0f Hz | %d tones | train len=%d",
-                     seq_id, cf_hz, len(mean_rates_on), len(train))
 
     logger.info("Phase 1 complete — %d sequences processed.", len(per_seq))
+
+    # ── Validate seq_id alignment ─────────────────────────────────────────────
+    expected_seq_ids = {seq_id_fn(ton, isi, freq)
+                        for ton, isi, freq in stimuli} | {SILENCE_SEQ_ID}
+    missing = expected_seq_ids - set(per_seq.keys())
+    if missing:
+        sample = sorted(missing)[:3]
+        raise ValueError(
+            f"Stimulus params do not match .npz files in results_dir.\n"
+            f"{len(missing)} expected seq_ids not found in per_seq "
+            f"(e.g. {sample}).\n"
+            f"Check that FREQ_RANGE, ALL_DURATIONS, and ISI_MS match "
+            f"the WAV files used to generate the cochlear results."
+        )
 
     # ── Phase 2: per-run assembly ─────────────────────────────────────────────
     cf_hz_used = next(iter(per_seq.values()))["cf_hz"]

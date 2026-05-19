@@ -17,7 +17,6 @@ import numpy as np
 from pathlib import Path
 
 from auditory_prf.utils.stimulus_utils import calc_cfs
-from auditory_prf.stimuli.soundgen import SoundGen
 from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_design
 from auditory_prf.prf_pipeline.full_pipeline_notemporal import run_pipeline
 
@@ -32,7 +31,7 @@ CF_INDICES  = list(range(30))
 ALPHA = 1.0
 
 # ── stimulus params (must match WAV files in RESULTS_DIR) ────────────────────
-ALL_DURATIONS    = (25, 50, 75, 150, 250, 350, 400, 500)  # ms — 8 fixed durations
+ALL_DURATIONS    = (30, 50, 75, 110, 150, 200, 350, 450)  # ms — 8 fixed durations
 ISI_MS           = 100                  # ms — fixed for all conditions
 FREQ_RANGE       = (400, 1600, 3)       # matches fc400hz / fc830hz / fc1600hz
 TRIAL_DURATION_S = 20.0
@@ -53,8 +52,9 @@ TR_S            = 1.6
 def build_run_designs() -> list:
     """Generate all 1000 run designs (shared across CFs)."""
     desired_freqs = calc_cfs(FREQ_RANGE, species='human')
-    sound_gen     = SoundGen(48000, tau=0.005)
-    seq_id_fn     = make_seq_id_fn(FREQ_RANGE, TRIAL_DURATION_S, sound_gen)
+    seq_id_fn     = make_seq_id_fn(FREQ_RANGE,
+                                   tone_on_ms_options=ALL_DURATIONS,
+                                   isi_ms_options=(ISI_MS,) * len(ALL_DURATIONS))
 
     print(f"Building {N_DESIGNS} run designs "
           f"({N_CONDITIONS_PER_RUN} durations × {len(desired_freqs)} freqs "

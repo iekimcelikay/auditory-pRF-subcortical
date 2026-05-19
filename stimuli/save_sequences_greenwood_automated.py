@@ -26,7 +26,9 @@ for p in (root, stimuli_dir):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import numpy as np
 from auditory_prf.utils.stimulus_utils import calc_cfs
+from auditory_prf.utils.condition_map import make_condition_map, SILENCE_SEQ_ID
 from soundgen import SoundGen
 from save_sound import save_sequence_as_wav
 # try again
@@ -39,7 +41,7 @@ FREQ_RANGE       = (400, 1600, 3)    # (min_hz, max_hz, num_cfs)
 SPECIES          = 'human'            # 'human' or 'cat'
 
 # -- Stimulus parameters — sweep over all (duration, ISI) pairs ---------------
-TONE_ON_MS       = (25, 50, 75, 150, 250, 350, 400, 500)  # ms
+TONE_ON_MS       = (30, 50, 75, 110, 150, 200, 350, 450)  # ms
 ISI_MS           = (100,) * len(TONE_ON_MS)                          # ms
 TOTAL_DURATION   = 20      # s  — total sequence length
 DBSPL            = 60       # dB SPL
@@ -52,7 +54,6 @@ STEREO           = True     # True → (N, 2) stereo wav; False → (N,) mono
 # -- Output --------------------------------------------------------------------
 BASE_OUT_DIR     = Path(__file__).parent / "produced"
 RUN_PREFIX       = ""    # subfolder: produced/{RUN_PREFIX}_{YYYYMMDD_HHMM}/
-START_SEQ_NUMBER = 1            # sequence numbers count up from this value
 WAV_SUBTYPE      = "FLOAT"       # soundfile subtype; "PCM_16" for integer 16-bit
 
 # ==============================================================================
@@ -67,6 +68,7 @@ def main() -> None:
 
     cfs = calc_cfs(FREQ_RANGE, species=SPECIES)
     soundgen = SoundGen(SAMPLE_RATE, TAU_RAMP)
+    condition_map = make_condition_map(TONE_ON_MS, ISI_MS, FREQ_RANGE, species=SPECIES)
 
     total_files = len(TONE_ON_MS) * len(cfs)
     print(f"Saving {total_files} files to: {out_dir}")
@@ -75,7 +77,6 @@ def main() -> None:
     print(f"  ISIs        : {ISI_MS} ms")
     print()
 
-    seq_num = START_SEQ_NUMBER
     file_count = 0
 
     for tone_ms, isi_ms in zip(TONE_ON_MS, ISI_MS):
@@ -84,6 +85,7 @@ def main() -> None:
         num_tones, _, _ = soundgen.calculate_num_tones(tone_s, isi_s, TOTAL_DURATION)
 
         for cf in cfs:
+            cond_id = condition_map[(int(tone_ms), int(round(cf)))]
             sequence = soundgen.generate_sequence(
                 freq=cf,
                 num_harmonics=NUM_HARMONICS,
@@ -95,19 +97,19 @@ def main() -> None:
                 stereo=STEREO,
             )
 
-            filename = (
-                f"sequence{seq_num:02d}"
-                f"_fc{cf:.0f}hz"
-                f"_dur{tone_ms}ms"
-                f"_isi{isi_ms}ms"
-                f"_total{TOTAL_DURATION}sec"
-                f"_numtones{num_tones}.wav"
-            )
+            filename = f"{cond_id}_total{TOTAL_DURATION}sec_numtones{num_tones}.wav"
             save_sequence_as_wav(sequence, SAMPLE_RATE, str(out_dir / filename), subtype=WAV_SUBTYPE)
 
             file_count += 1
             print(f"  [{file_count:>3}/{total_files}] {filename}")
-            seq_num += 1
+
+    # silence WAV — cond00, used as the null-trial cochlear response
+    n_silence = int(SAMPLE_RATE * TOTAL_DURATION)
+    silence = np.zeros((n_silence, 2) if STEREO else (n_silence,), dtype=np.float32)
+    silence_filename = f"{SILENCE_SEQ_ID}.wav"
+    save_sequence_as_wav(silence, SAMPLE_RATE, str(out_dir / silence_filename), subtype=WAV_SUBTYPE)
+    file_count += 1
+    print(f"  [{file_count:>3}/{total_files + 1}] {silence_filename}  (silence / cond00)")
 
     print(f"\nDone. Saved {file_count} files to {out_dir}")
 

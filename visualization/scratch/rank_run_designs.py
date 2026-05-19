@@ -29,12 +29,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from auditory_prf.utils.stimulus_utils import calc_cfs
-from auditory_prf.stimuli.soundgen import SoundGen
 from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_design
 
 # ── must match run_pipeline_notemporal.py ─────────────────────────────────────
 BASE_SEED            = 42
-ALL_DURATIONS        = (25, 50, 75, 150, 250, 350, 400, 500)
+ALL_DURATIONS        = (30, 50, 75, 110, 150, 200, 350, 450)
 ISI_MS               = 100
 FREQ_RANGE           = (400, 1600, 3)
 TRIAL_DURATION_S     = 20.0
@@ -82,8 +81,9 @@ def distance_from_mean(bold_matrix: np.ndarray) -> np.ndarray:
 
 def _build_helpers():
     desired_freqs = calc_cfs(FREQ_RANGE, species='human')
-    sound_gen     = SoundGen(48000, tau=0.005)
-    seq_id_fn     = make_seq_id_fn(FREQ_RANGE, TRIAL_DURATION_S, sound_gen)
+    seq_id_fn     = make_seq_id_fn(FREQ_RANGE,
+                                   tone_on_ms_options=ALL_DURATIONS,
+                                   isi_ms_options=(ISI_MS,) * len(ALL_DURATIONS))
     return desired_freqs, seq_id_fn
 
 
@@ -121,7 +121,7 @@ def reconstruct_run_design(run_number: int, desired_freqs, seq_id_fn) -> list:
 
 def parse_seq_id(seq_id) -> tuple:
     """Extract (freq_hz, duration_ms, isi_ms) from a seq_id string, or nulls."""
-    if seq_id is None or seq_id == "null":
+    if seq_id is None or seq_id == "null" or seq_id.startswith("cond00"):
         return None, None, None
     freq_hz     = int(re.search(r'_fc(\d+)hz',  seq_id).group(1))
     duration_ms = int(re.search(r'_dur(\d+)ms', seq_id).group(1))

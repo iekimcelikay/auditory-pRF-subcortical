@@ -4,13 +4,18 @@ Assemble a full-run BOLD timeseries from per-sequence neural responses.
 
 Each unique sequence (WAV file) may appear at multiple onsets within one
 fMRI run (repetitions, counterbalanced design).  This module places the
-pre-computed pRF-weighted boxcar trains at their respective onsets, runs
-AdapTrans once across the entire run so that carry-over between back-to-back
-sequences is modelled correctly, then convolves with the HRF.
+pre-computed pRF-weighted boxcar trains at their respective onsets, then
+convolves with the HRF.  An optional AdapTrans step models onset/offset
+responses and carry-over adaptation between back-to-back sequences
+(controlled by ``apply_adaptrans_flag``).
+
+Works with any pipeline variant (full_pipeline_with_adaptrans,
+full_pipeline_shapekern_adaptrans, full_pipeline_impulse_adaptrans, …)
+as long as ``per_seq`` contains ``{"train": np.ndarray}`` entries.
 
 Typical usage
 -------------
-    from auditory_prf.prf_pipeline.full_pipeline_with_adaptrans import run_pipeline
+    from auditory_prf.prf_pipeline.full_pipeline_with_adaptrans import run_pipeline`
     from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
     from auditory_prf.prf_pipeline.run_assembly import assemble_run_bold
 
@@ -31,7 +36,7 @@ Typical usage
     )
 
 Null trials are represented by None or the string "null" in run_design and
-contribute zeros to the assembled train (silence resets the AdapTrans filter).
+contribute zeros to the assembled train.
 """
 
 from __future__ import annotations
@@ -43,55 +48,46 @@ import numpy as np
 
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import apply_adaptrans
 from auditory_prf.prf_pipeline.hrf import convolve_hrf
-from auditory_prf.utils.stimulus_utils import calc_cfs
+from auditory_prf.utils.condition_map import make_condition_map, SILENCE_SEQ_ID
 
 logger = logging.getLogger(__name__)
 
 
 def make_seq_id_fn(
     freq_range: tuple,
-    trial_duration_s: float,
-    sound_gen,
+    tone_on_ms_options: tuple,
+    isi_ms_options: tuple,
     species: str = 'human',
 ) -> Callable:
     """Build the seq_id mapping function needed by generate_run_design / assemble_run_bold.
 
-    Returns a callable ``(tone_on_ms, isi_ms, freq_hz) -> seq_id str | None``
-    whose output matches the WAV filename stem from save_sequences_greenwood_automated.py.
+    Returns a callable ``(tone_on_ms, isi_ms, freq_hz) -> cond_id str``
+    whose output is the stable condition ID used as the universal lookup key
+    across WAV files, cochlear NPZ results, and run designs.
 
     Parameters
     ----------
     freq_range : tuple of (min_hz, max_hz, num_cfs)
         Greenwood CF range — same as used in the experiment and cochlear model.
-    trial_duration_s : float
-        Trial duration in seconds (e.g. 5.0).
-    sound_gen : SoundGen
-        Used to compute num_tones for the filename.
+    tone_on_ms_options : tuple of int
+        All tone durations used in the experiment (ms).
+    isi_ms_options : tuple of int
+        ISI (ms) for each duration — same length as tone_on_ms_options.
     species : str
         'human' or 'cat' (default 'human').
     """
-    desired_freqs  = calc_cfs(freq_range, species=species)
-    cf_to_seqnum   = {round(cf): i + 1 for i, cf in enumerate(desired_freqs)}
+    condition_map = make_condition_map(tone_on_ms_options, isi_ms_options,
+                                       freq_range, species=species)
 
     def _fn(tone_on_ms, isi_ms, freq_hz):
-        if freq_hz is None:
-            return None
-        seq_num = cf_to_seqnum.get(round(freq_hz))
-        if seq_num is None:
+        key = (0, None) if freq_hz is None else (int(tone_on_ms), int(round(freq_hz)))
+        cond_id = condition_map.get(key)
+        if cond_id is None:
             raise ValueError(
-                f"freq_hz={freq_hz:.1f} not found in CF array {list(cf_to_seqnum)}"
+                f"(dur={tone_on_ms} ms, freq={freq_hz:.0f} Hz) not found in condition_map. "
+                f"Check tone_on_ms_options and freq_range."
             )
-        num_tones, _, _ = sound_gen.calculate_num_tones(
-            tone_on_ms / 1000.0, isi_ms / 1000.0, trial_duration_s
-        )
-        return (
-            f"sequence{seq_num:02d}"
-            f"_fc{freq_hz:.0f}hz"
-            f"_dur{tone_on_ms:.0f}ms"
-            f"_isi{isi_ms:.0f}ms"
-            f"_total{int(trial_duration_s)}sec"
-            f"_numtones{num_tones}"
-        )
+        return cond_id
 
     return _fn
 
@@ -166,7 +162,7 @@ def assemble_run_bold(
     missing = set()
     for seq_id, onset_s in run_design:
         if seq_id is None or seq_id == "null":
-            continue
+            continue  # legacy fallback; normally null trials use SILENCE_SEQ_ID
         if seq_id not in per_seq:
             missing.add(seq_id)
             continue
