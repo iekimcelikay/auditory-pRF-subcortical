@@ -33,7 +33,7 @@ def main():
     args = parser.parse_args()
 
     wav_dir = Path(args.wav_dir)
-    all_wav_files = sorted(wav_dir.glob("sequence*.wav"))
+    all_wav_files = sorted(wav_dir.glob("*.wav"))
     if not all_wav_files:
         print(f"No WAV files found in {wav_dir}")
         return
@@ -54,7 +54,7 @@ def main():
         powerlaw='approximate',
         seed=0,
         fs_target=1000.0,
-        output_dir=str(PROJECT_ROOT / "models_output" / "dipc_test_20260516_0054"),
+        output_dir=str(PROJECT_ROOT / "models_output" / wav_dir.name),
         experiment_name=f"dipc_8conditions_isi100ms_128ANF_wav{args.wav_index:03d}",
         save_formats=['npz'],
         save_mean_rates=False,
