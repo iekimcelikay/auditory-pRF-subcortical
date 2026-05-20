@@ -38,7 +38,7 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python /scratch/ecelikay/workspace/auditory-pRF-subcortical/examples/cochlea_customwas_example.py \
-    --wav-dir $AUDITORY_PRF_ROOT/stimuli/produced/_20260520_1407 \
+    --wav-dir $AUDITORY_PRF_ROOT/stimuli/produced/_20260520_1756 \
     --wav-index $SLURM_ARRAY_TASK_ID
 
 # End of job
