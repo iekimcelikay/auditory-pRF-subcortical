@@ -42,9 +42,9 @@ SPECIES          = 'human'            # 'human' or 'cat'
 
 # -- Stimulus parameters — sweep over all (duration, ISI) pairs ---------------
 TONE_ON_MS       = (30, 50, 75, 110, 150, 200, 350, 450)  # ms
-ISI_MS           = (100,) * len(TONE_ON_MS)                          # ms
+ISI_MS           = (50,) * len(TONE_ON_MS)                          # ms
 TOTAL_DURATION   = 20      # s  — total sequence length
-DBSPL            = 60       # dB SPL
+DBSPL            = 65       # dB SPL
 NUM_HARMONICS    = 1
 HARMONIC_FACTOR  = 1
 TAU_RAMP         = 0.005    # s  — onset/offset ramp
