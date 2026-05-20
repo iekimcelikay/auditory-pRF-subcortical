@@ -1,13 +1,9 @@
-import re
 import numpy as np
 import sys
 from pathlib import Path
 
 from auditory_prf.utils.result_saver import ResultSaver
-
-# Matches the stable cond_id prefix in WAV stems / soundfileid strings.
-# e.g. "cond03_fc400hz_dur50ms_isi100ms_total20sec_numtones8" → "cond03_fc400hz_dur50ms_isi100ms"
-_COND_ID_RE = re.compile(r'(cond\d+_fc\d+hz_dur\d+ms_isi\d+ms)')
+from auditory_prf.utils.timing_utils import COND_ID_RE as _COND_ID_RE
 
 def get_cf_timecourse(data: dict, cf) -> tuple[np.ndarray, int, float]:
     """Extract a single 1-D PSTH timecourse from a loaded .npz data dict.

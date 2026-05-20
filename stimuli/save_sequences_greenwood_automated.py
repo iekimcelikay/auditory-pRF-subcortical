@@ -31,19 +31,23 @@ from auditory_prf.utils.stimulus_utils import calc_cfs
 from auditory_prf.utils.condition_map import make_condition_map, SILENCE_SEQ_ID
 from soundgen import SoundGen
 from save_sound import save_sequence_as_wav
+from find_optimal_durations import find_closest_durations
 # try again
 # ==============================================================================
 # CONFIG  — edit everything here
 # ==============================================================================
 
 # -- Frequency / CF (mirrors ToneConfig.freq_range / CochleaConfig) -----------
-FREQ_RANGE       = (400, 1600, 3)    # (min_hz, max_hz, num_cfs)
+FREQ_RANGE       = (450, 1600, 3)    # (min_hz, max_hz, num_cfs)
 SPECIES          = 'human'            # 'human' or 'cat'
 
 # -- Stimulus parameters — sweep over all (duration, ISI) pairs ---------------
-TONE_ON_MS       = (30, 50, 75, 110, 150, 200, 350, 450)  # ms
-ISI_MS           = (50,) * len(TONE_ON_MS)                          # ms
 TOTAL_DURATION   = 20      # s  — total sequence length
+_TARGET_DURS_MS  = (35, 45, 60, 75, 100, 150, 250, 500)  # desired durations (ms)
+ISI_MS_SINGLE    = 100                                    # ms — shared ISI for all conditions
+TONE_ON_MS       = find_closest_durations(_TARGET_DURS_MS, isi_ms=ISI_MS_SINGLE, seq_dur_s=TOTAL_DURATION,
+                                          dur_max_ms=max(_TARGET_DURS_MS))
+ISI_MS           = (ISI_MS_SINGLE,) * len(TONE_ON_MS)
 DBSPL            = 65       # dB SPL
 NUM_HARMONICS    = 1
 HARMONIC_FACTOR  = 1
@@ -85,7 +89,7 @@ def main() -> None:
         num_tones, _, _ = soundgen.calculate_num_tones(tone_s, isi_s, TOTAL_DURATION)
 
         for cf in cfs:
-            cond_id = condition_map[(int(tone_ms), int(round(cf)))]
+            cond_id = condition_map[(int(round(float(tone_ms))), int(round(cf)))]
             sequence = soundgen.generate_sequence(
                 freq=cf,
                 num_harmonics=NUM_HARMONICS,

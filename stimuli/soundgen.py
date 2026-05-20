@@ -141,6 +141,16 @@ class SoundGen:
         sound[-L:] *= hw[L:]
         return sound
 
+    def hanning_ramp(self, sound):
+        ramp_samples = int(self.sample_rate * self.tau)
+        full_window = np.hanning(2 * ramp_samples)
+        ramp_in  = full_window[:ramp_samples]
+        ramp_out = full_window[ramp_samples:]
+        envelope = np.ones_like(sound)
+        envelope[:ramp_samples]  *= ramp_in
+        envelope[-ramp_samples:] *= ramp_out
+        return sound * envelope
+
     def sine_ramp(self, sound):
         L = int(self.tau * self.sample_rate)
         t = np.linspace(0, L / self.sample_rate, L)
@@ -182,9 +192,8 @@ class SoundGen:
         for i in range(num_tones):
             sequence = np.concatenate((sequence, ramped_sound))
 
-            # Add ISI (silent gap) between tones, but not after the last tone
-            if i < num_tones - 1:
-                sequence = np.concatenate((sequence, np.zeros(isi_samples)))
+            # Add ISI (silent gap) after every tone, including the last
+            sequence = np.concatenate((sequence, np.zeros(isi_samples)))
 
         # Pad or truncate to reach exactly total_duration
         if len(sequence) < total_samples:
@@ -237,8 +246,7 @@ class SoundGen:
         total_samples = int(total_duration * self.sample_rate)
         isi_samples = int(isi * self.sample_rate)
         tone_samples = int(tone_duration * self.sample_rate)
-        num_tones = int((total_samples + isi_samples) //
-                        (tone_samples + isi_samples))
+        num_tones = int(total_samples // (tone_samples + isi_samples))  # guarantees trailing ISI fits
         return num_tones, isi_samples, total_samples
 
     def generate_sequence_from_freq_array(self,

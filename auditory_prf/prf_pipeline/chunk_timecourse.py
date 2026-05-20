@@ -13,9 +13,10 @@ chunk_timecourse(...)                  -> dict
 """
 
 from __future__ import annotations
-import re
 import numpy as np
 from typing import Optional, Tuple, List
+
+from auditory_prf.utils.timing_utils import parse_timing
 
 
 # ---------------------------------------------------------------------------
@@ -25,16 +26,12 @@ from typing import Optional, Tuple, List
 def parse_tone_timing(identifier: str) -> Optional[Tuple[float, float]]:
     """Extract ``(tone_dur_ms, isi_ms)`` from a filename identifier.
 
+    Delegates to :func:`auditory_prf.utils.timing_utils.parse_timing`.
     Expects tokens of the form ``dur<N>ms`` and ``isi<N>ms`` anywhere in the
-    identifier string (e.g.
-    ``dipc_sequence03_fc125hz_dur267ms_isi67ms_...``).
+    identifier string (e.g. ``cond01_fc400hz_dur251ms_isi100ms_...``).
     Returns ``None`` if either token is not found.
     """
-    dur_match = re.search(r"dur(\d+(?:\.\d+)?)ms", identifier, re.IGNORECASE)
-    isi_match = re.search(r"isi(\d+(?:\.\d+)?)ms", identifier, re.IGNORECASE)
-    if dur_match and isi_match:
-        return float(dur_match.group(1)), float(isi_match.group(1))
-    return None
+    return parse_timing(identifier)
 
 
 def compute_tone_onsets_offsets(

@@ -10,15 +10,16 @@ lookup key across WAV files, cochlear NPZ results, and run designs, and
 so that chunk_from_id can parse dur/isi directly from the key string.
 
 Example with 8 durations × 3 frequencies (ISI=100 ms throughout):
-    cond01_fc400hz_dur25ms_isi100ms
-    cond02_fc830hz_dur25ms_isi100ms
-    cond03_fc1600hz_dur25ms_isi100ms
-    cond04_fc400hz_dur50ms_isi100ms
+    cond01_fc400hz_dur20ms_isi100ms
+    cond02_fc830hz_dur20ms_isi100ms
+    cond03_fc1600hz_dur20ms_isi100ms
+    cond04_fc400hz_dur30ms_isi100ms
     ...
-    cond24_fc1600hz_dur500ms_isi100ms
+    cond24_fc1600hz_dur488ms_isi100ms
 """
 
 from auditory_prf.utils.stimulus_utils import calc_cfs
+from auditory_prf.utils.timing_utils import fmt_dur_ms, fmt_isi_ms
 
 SILENCE_COND_ID = "cond00"
 SILENCE_SEQ_ID  = "cond00_dur0ms_isi0ms"
@@ -30,13 +31,13 @@ def make_condition_map(
     freq_range: tuple,
     species: str = 'human',
 ) -> dict:
-    """Return a mapping from (dur_ms, rounded_freq_hz) to condition ID string.
+    """Return a mapping from (rounded_dur_ms, rounded_freq_hz) to condition ID string.
 
     Parameters
     ----------
-    tone_on_ms_options : tuple of int
+    tone_on_ms_options : tuple of float
         All tone durations used in the experiment (ms).
-    isi_ms_options : tuple of int
+    isi_ms_options : tuple of float
         ISI (ms) for each duration — same length as tone_on_ms_options.
     freq_range : tuple of (min_hz, max_hz, num_cfs)
         Greenwood CF range — same as used in WAV generation and cochlear model.
@@ -45,7 +46,7 @@ def make_condition_map(
 
     Returns
     -------
-    dict : {(dur_ms, rounded_freq_hz): 'cond{N:02d}_fc{F}hz_dur{D}ms_isi{I}ms'}
+    dict : {(rounded_dur_ms, rounded_freq_hz): 'cond{N:02d}_fc{F}hz_dur{D}ms_isi{I}ms'}
         Null key (0, None) maps to SILENCE_SEQ_ID.
     """
     desired_freqs = calc_cfs(freq_range, species=species)
@@ -55,11 +56,11 @@ def make_condition_map(
     i = 1
     for dur_ms, isi_ms in dur_isi_sorted:
         for freq_hz in desired_freqs:
-            key    = (int(dur_ms), int(round(freq_hz)))
+            key     = (int(round(float(dur_ms))), int(round(freq_hz)))
             cond_id = (f"cond{i:02d}"
                        f"_fc{int(round(freq_hz))}hz"
-                       f"_dur{int(dur_ms)}ms"
-                       f"_isi{int(isi_ms)}ms")
+                       f"_{fmt_dur_ms(dur_ms)}"
+                       f"_{fmt_isi_ms(isi_ms)}")
             result[key] = cond_id
             i += 1
 
