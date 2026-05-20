@@ -7,20 +7,28 @@ from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulati
 
 PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
 
-WAV_DIR_DEFAULT = PROJECT_ROOT / "stimuli" / "produced" / "_20260520_1407"
+WAV_DIR_DEFAULT = PROJECT_ROOT / "stimuli" / "produced" / "_20260520_1756"
 
 
 
 def custom_parser(filename: str) -> dict:
-    """Parse filename: sequence01_fc440hz_dur200ms_isi100ms_total5sec_numtones1.wav"""
-    parts = filename.replace('.wav', '').split('_')
+    """Parse filename: cond01_fc450hz_dur35ms_isi100ms_total20sec_numtones148.wav
+    Handles silence file (cond00_dur0ms_isi0ms.wav) which has no fc field.
+    """
+    import re
+    stem = filename.replace('.wav', '')
+    fc_m    = re.search(r'fc(\d+)hz',      stem)
+    dur_m   = re.search(r'dur(\d+)ms',     stem)
+    isi_m   = re.search(r'isi(\d+)ms',     stem)
+    total_m = re.search(r'total(\S+?)sec', stem)
+    tones_m = re.search(r'numtones(\d+)',  stem)
     return {
-        'sequence': parts[0],
-        'center_freq': parts[1],
-        'tone_duration': parts[2],
-        'isi': parts[3],
-        'total_duration': parts[4],
-        'num_tones': parts[5],
+        'sequence':       stem.split('_')[0],
+        'center_freq':    f"fc{fc_m.group(1)}hz"    if fc_m    else 'fc0hz',
+        'tone_duration':  f"dur{dur_m.group(1)}ms"  if dur_m   else 'dur0ms',
+        'isi':            f"isi{isi_m.group(1)}ms"  if isi_m   else 'isi0ms',
+        'total_duration': f"total{total_m.group(1)}sec" if total_m else 'total0sec',
+        'num_tones':      f"numtones{tones_m.group(1)}" if tones_m else 'numtones0',
     }
 #correct
 
