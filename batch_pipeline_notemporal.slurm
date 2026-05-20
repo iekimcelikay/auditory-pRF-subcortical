@@ -29,7 +29,7 @@ export OMP_PROC_BIND=close
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 cd $AUDITORY_PRF_ROOT
 
-RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/_20260520_1407
+RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/_20260520_1756
 OUTPUT_DIR=$AUDITORY_PRF_ROOT/models_output/prf_notemporal_$(date +%Y%m%d)_job${SLURM_ARRAY_JOB_ID}
 
 conda run -n strf3.9 python \

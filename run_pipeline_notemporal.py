@@ -21,7 +21,7 @@ from auditory_prf.prf_pipeline.run_assembly import make_seq_id_fn, generate_run_
 from auditory_prf.prf_pipeline.full_pipeline_notemporal import run_pipeline
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-RESULTS_DIR = Path("./models_output/dipc_test_20260516_0054")
+RESULTS_DIR = Path("./models_output/_20260520_1756")
 OUTPUT_DIR  = Path(f"./models_output/prf_notemporal_{datetime.now().strftime('%Y%m%d_%H%M')}")
 
 # ── cochlear CFs (indices into the 30-CF cochlear model) ──────────────────────
@@ -31,9 +31,9 @@ CF_INDICES  = list(range(30))
 ALPHA = 1.0
 
 # ── stimulus params (must match WAV files in RESULTS_DIR) ────────────────────
-ALL_DURATIONS    = (30, 50, 75, 110, 150, 200, 350, 450)  # ms — 8 fixed durations
-ISI_MS           = 100                  # ms — fixed for all conditions
-FREQ_RANGE       = (400, 1600, 3)       # matches fc400hz / fc830hz / fc1600hz
+ALL_DURATIONS    = (35, 45, 60, 75, 100, 150, 251, 488)   # ms — 8 fixed durations
+ISI_MS           = 100                   # ms — fixed for all conditions
+FREQ_RANGE       = (450, 1600, 3)        # matches fc450hz / fc874hz / fc1600hz
 TRIAL_DURATION_S = 20.0
 OPENING_BLANK_S  = 10.0
 ITI_RANGE_S      = (0, 0)

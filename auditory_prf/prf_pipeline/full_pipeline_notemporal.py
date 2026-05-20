@@ -69,9 +69,9 @@ EXP_NAME        = "dipc_test_250225_01"
 DEFAULT_BASE_DIR = Path(f"./models_output/{EXP_NAME}")
 
 # ── run design defaults ──────────────────────────────────────────────────────
-TONE_ON_MS      = (30, 50, 75, 110, 150, 200, 350, 450)
+TONE_ON_MS      = (35, 45, 60, 75, 100, 150, 251, 488)
 ISI_MS          = (100,) * len(TONE_ON_MS)
-FREQ_RANGE      = (400, 1600, 3)    # (min_hz, max_hz, num_cfs) Greenwood-spaced
+FREQ_RANGE      = (450, 1600, 3)    # (min_hz, max_hz, num_cfs) Greenwood-spaced
 NULL_FRACTION   = 0.25
 TRIAL_DURATION_S = 20.0
 OPENING_BLANK_S  = 10.0
