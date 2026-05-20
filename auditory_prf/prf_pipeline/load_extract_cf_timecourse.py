@@ -128,6 +128,8 @@ def load_population_psth(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, in
     _, cf_index, cf_hz = get_cf_timecourse(data, cf)
     population_psth = np.asarray(data["population_rate_psth"])   # (n_cfs, n_bins)
     time_axis       = np.asarray(data["time_axis"])
-    seq_id          = str(data.get("soundfileid", npz_path.stem))
+    raw_id  = str(data.get("soundfileid", npz_path.stem))
+    m       = _COND_ID_RE.search(raw_id)
+    seq_id  = m.group(1) if m else raw_id
 
     return population_psth, time_axis, cf_index, cf_hz, seq_id
