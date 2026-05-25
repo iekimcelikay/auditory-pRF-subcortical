@@ -121,8 +121,10 @@ def run_pipeline(
 
     npz_files = sorted(_results_dir.rglob("*.npz"))
     if not npz_files:
-        logger.error("No .npz files found in %s", _results_dir)
-        return {}
+        raise FileNotFoundError(
+            f"No .npz files found in {_results_dir}. "
+            "Run the cochlear simulation first and check RESULTS_DIR."
+        )
     logger.info("Found %d NPZ file(s)", len(npz_files))
 
     # ── HRF kernel (built once) ──────────────────────────────────────────────
