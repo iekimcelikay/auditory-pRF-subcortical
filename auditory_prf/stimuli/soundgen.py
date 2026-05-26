@@ -57,6 +57,7 @@ class SoundGen:
         normalized_sound = normalized_sound / (max_amplitude + 0.01)
 
         return normalized_sound
+        #return sound
 
     def noise_maker(self, tone_duration, seed=None):
         if seed is not None:
@@ -155,13 +156,17 @@ class SoundGen:
     def generate_sequence(self,
                           freq,
                           num_harmonics,
-                          tone_duration,
+                          tone_on_ms,
+                          isi_ms,
                           harmonic_factor,
                           dbspl,
-                          total_duration,
-                          isi,
+                          total_duration=5.0,
                           stereo=True,
                           ):
+
+        # Convert ms to seconds for internal computation
+        tone_duration = tone_on_ms / 1000.0
+        isi = isi_ms / 1000.0
 
         # Generate the tone using the sound_maker method
         sound = self.sound_maker(freq,
@@ -171,6 +176,7 @@ class SoundGen:
                                  dbspl)
         # Sine ramp
         ramped_sound = self.sine_ramp(sound)
+
         # Calculate the number of tones that can fit into the total duration
         # Call the function here
         num_tones, isi_samples, total_samples = \
@@ -178,8 +184,10 @@ class SoundGen:
 
         # Generate the sequence with ISI gaps between each tone
         sequence = np.array([])
+        rel_onsets = []
 
         for i in range(num_tones):
+            rel_onsets.append(i * (tone_duration + isi) * 1000) # ms
             sequence = np.concatenate((sequence, ramped_sound))
 
             # Add ISI (silent gap) between tones, but not after the last tone
@@ -197,9 +205,9 @@ class SoundGen:
 
         # If stereo is desired, duplicate the mono sequence into two channels
         if stereo:
-            sequence = np.column_stack((sequence, sequence))
+            sequence = np.column_stack([sequence, sequence])
 
-        return sequence
+        return sequence, rel_onsets
 
     def sample_frequencies_gaussian(self,
                                     freq_mean,
@@ -318,7 +326,7 @@ class SoundGen:
 
         """
         # Step 1: Calculate how many tones we need
-        num_tones = self.calculate_num_tones(tone_duration, isi, total_duration)
+        num_tones, _, _ = self.calculate_num_tones(tone_duration, isi, total_duration)
 
         # Step 2: Sample frequencies
         frequencies = self.sample_frequencies_gaussian(

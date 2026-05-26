@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from auditory_prf.utils.result_saver import ResultSaver
+from auditory_prf.utils.timing_utils import COND_ID_RE as _COND_ID_RE
 
 def get_cf_timecourse(data: dict, cf) -> tuple[np.ndarray, int, float]:
     """Extract a single 1-D PSTH timecourse from a loaded .npz data dict.
@@ -84,7 +85,9 @@ def load_cf_timecourse(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, int,
 
     timecourse, cf_index, cf_hz = get_cf_timecourse(data, cf)
     time_axis = np.asarray(data["time_axis"])
-    seq_id    = str(data.get("soundfileid", npz_path.stem))
+    raw_id    = str(data.get("soundfileid", npz_path.stem))
+    m         = _COND_ID_RE.search(raw_id)
+    seq_id    = m.group(1) if m else raw_id
 
     return timecourse, time_axis, cf_index, cf_hz, seq_id
 
@@ -125,6 +128,8 @@ def load_population_psth(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, in
     _, cf_index, cf_hz = get_cf_timecourse(data, cf)
     population_psth = np.asarray(data["population_rate_psth"])   # (n_cfs, n_bins)
     time_axis       = np.asarray(data["time_axis"])
-    seq_id          = str(data.get("soundfileid", npz_path.stem))
+    raw_id  = str(data.get("soundfileid", npz_path.stem))
+    m       = _COND_ID_RE.search(raw_id)
+    seq_id  = m.group(1) if m else raw_id
 
     return population_psth, time_axis, cf_index, cf_hz, seq_id
