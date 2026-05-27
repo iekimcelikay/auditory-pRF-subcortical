@@ -36,6 +36,7 @@ docs_latex/
 # Outputs
 outputs/
 models_output/
+stimuli/produced/_*
 figures/
 *.npz
 *.mat
