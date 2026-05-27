@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 from scipy.signal import decimate
 #19/02/2026
@@ -100,9 +102,9 @@ def apply_adaptrans(an_output: np.ndarray,
                     CFs_Hz: np.ndarray,
                     dt_ms: float,
                     w: float = 0.8,
-                    K: int = None,
+                    K: Optional[int] = None,
                     rectify: bool = False,
-                    pad_value: float = None) -> np.ndarray:
+                    pad_value: Optional[float] = None) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
 
@@ -122,6 +124,7 @@ def apply_adaptrans(an_output: np.ndarray,
         3x the longest time constant across all CFs.
     rectify : bool
         Half-wave rectify output (ReLU). Default False. #TODO: make it false.
+    # NOTE: however we actually need to rectify the output, why do i make the default false?
 
     pad_value : float or None
         Value used to pad the left edge of each channel before convolution.
@@ -190,7 +193,7 @@ def preprocess_AN_output(an_output: np.ndarray,
                          dt_fine_ms: float,
                          downsample_factor: int,
                          w: float = 0.8,
-                         K: int = None) -> np.ndarray:
+                         K: Optional[int] = None) -> np.ndarray:
     """
     Full preprocessing pipeline: AN output → ON/OFF representation.
 
