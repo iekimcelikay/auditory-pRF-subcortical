@@ -7,8 +7,7 @@
 -----
 
 Last edit to the repo: 27/05/26
-** MAIN BRANCH CHANGED TO DIPC DURING DEVELOPMENT FOR EASE OF ACCESS.
-
+* Current working branch: `dipc` (last updated code is there)
 
 https://github.com/iekimcelikay/cochlea.git install cochlea py3-zilany2014 from here.
 ## Installing `cochlea` (zilany2014 model) on dIPC Servers
