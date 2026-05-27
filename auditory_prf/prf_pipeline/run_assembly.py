@@ -225,7 +225,7 @@ def generate_run_design(
     trial_duration_s: float = 5.0,
     opening_blank_s: float = 10.0,
     iti_range_s: tuple = (1.0, 1.5),
-    seed: int = None,
+    seed: Optional[int] = None,
 ) -> list:
     """Generate a run_design without running the PsychoPy experiment.
 
