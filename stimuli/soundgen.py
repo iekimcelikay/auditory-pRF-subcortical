@@ -238,6 +238,116 @@ class SoundGen:
 
         return frequencies
 
+    def sample_frequencies_log_gaussian(
+        self,
+        center_hz: float,
+        sigma_oct: float,
+        num_samples: int,
+        freq_min_hz: float = None,
+        freq_max_hz: float = None,
+        seed: int = None,
+    ) -> np.ndarray:
+        """Sample frequencies from a Gaussian defined in log2-frequency space.
+
+        Parameters
+        ----------
+        center_hz : float
+            Center frequency in Hz (mean in log2 space).
+        sigma_oct : float
+            Standard deviation in octaves (log2 units).
+        num_samples : int
+            Number of frequency samples to draw.
+        freq_min_hz : float, optional
+            Lower clip boundary in Hz.
+        freq_max_hz : float, optional
+            Upper clip boundary in Hz.
+        seed : int, optional
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        np.ndarray
+            Sampled frequencies in Hz, shape (num_samples,).
+        """
+        if seed is not None:
+            np.random.seed(seed)
+        log2_samples = np.random.normal(np.log2(center_hz), sigma_oct, num_samples)
+        frequencies_hz = np.power(2.0, log2_samples)
+        if freq_min_hz is not None:
+            frequencies_hz = np.maximum(frequencies_hz, freq_min_hz)
+        if freq_max_hz is not None:
+            frequencies_hz = np.minimum(frequencies_hz, freq_max_hz)
+        return frequencies_hz
+
+    def generate_bandpass_noise_sequence(
+        self,
+        lowcut_hz: float,
+        highcut_hz: float,
+        tone_duration: float,
+        dbspl: float,
+        total_duration: float,
+        isi: float,
+        numtaps: int = 1001,
+        base_seed: int = 0,
+        stereo: bool = True,
+    ) -> np.ndarray:
+        """Generate a sequence of independent bandpass noise bursts with ISI gaps.
+
+        Each burst is a unique white-noise realisation filtered to [lowcut_hz,
+        highcut_hz], ramped with a sine onset/offset, and separated by silent
+        ISI periods.  The sequence is trimmed or zero-padded to exactly
+        total_duration seconds.
+
+        Parameters
+        ----------
+        lowcut_hz, highcut_hz : float
+            Bandpass filter edges in Hz.
+        tone_duration : float
+            Duration of each noise burst in seconds.
+        dbspl : float
+            Level of each burst in dB SPL.
+        total_duration : float
+            Total sequence length in seconds.
+        isi : float
+            Inter-stimulus interval (silence after each burst) in seconds.
+        numtaps : int
+            FIR filter length (default 1001).
+        base_seed : int
+            Base random seed; burst i uses seed base_seed + i.
+        stereo : bool
+            If True returns (total_samples, 2); otherwise (total_samples,).
+
+        Returns
+        -------
+        np.ndarray
+            Audio array, shape (total_samples, 2) or (total_samples,).
+        """
+        num_tones, isi_samples, total_samples = self.calculate_num_tones(
+            tone_duration, isi, total_duration
+        )
+        bursts = self.generate_multiple_band_limited_noises(
+            n_trials=num_tones,
+            tone_duration=tone_duration,
+            lowcut=lowcut_hz,
+            highcut=highcut_hz,
+            numtaps=numtaps,
+            dbspl=dbspl,
+            base_seed=base_seed,
+        )
+        sequence = np.zeros(total_samples, dtype=np.float64)
+        pos = 0
+        for burst in bursts:
+            ramped = self.sine_ramp(burst)
+            n = len(ramped)
+            if pos + n > total_samples:
+                break
+            sequence[pos : pos + n] = ramped
+            pos += n + isi_samples
+
+        if stereo:
+            sequence = np.column_stack((sequence, sequence))
+        return sequence.astype(np.float32)
+
     def calculate_num_tones(self,
                             tone_duration,
                             isi,

@@ -141,6 +141,7 @@ def apply_adaptrans(an_output: np.ndarray,
     N_CFs, T = an_output.shape
 
     # per-CF time constants and decay rates from Willmore et al.
+    #
     tau_vals = np.array([willmore_tau(cf) for cf in CFs_Hz])      # (N_CFs,) ms
     print(f"Tau for this CF is: {tau_vals}")
     a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)

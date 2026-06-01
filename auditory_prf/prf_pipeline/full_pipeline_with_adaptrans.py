@@ -13,6 +13,7 @@ import numpy as np
 import sys
 from pathlib import Path
 import logging
+from typing import Optional
 import matplotlib.pyplot as plt
 
 # Package level imports
@@ -31,6 +32,9 @@ from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_t
 
 # HRF convolution
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, convolve_hrf, hrf_summary, SUBCORTICAL_PARAMS
+
+# BOLD noise model
+from prf_models.pm_noise import PmNoise, apply_bold_noise
 
 # ---- FUNCTIONS THAT ARE USED:
 # _____________________________________________________________________________
@@ -133,8 +137,9 @@ def run_pipeline(
         tr_s: float = 1.0,
         apply_hrf: bool = True,
         apply_duration_gaussian: bool = True,
-        apply_adaptrans: bool = True,
+        apply_adaptrans_flag: bool = True,
         rectify: bool = False,
+        noise_model: Optional[PmNoise] = None,
 ):
 
     # --- Logging setup -----
@@ -257,7 +262,7 @@ def run_pipeline(
         n_1ms = len(train)
 
         # 7. Apply AdapTrans to the full train (all tones at once, preserving carry-over)
-        if apply_adaptrans:
+        if apply_adaptrans_flag:
             on_off = apply_adaptrans(
                 train[np.newaxis, :],
                 CFs_Hz=np.array([cf_hz]),
@@ -290,8 +295,15 @@ def run_pipeline(
         else:
             bold_on = bold_off = bold_combined = None
 
+        # 9. Add BOLD noise (optional)
+        bold_noisy = None
+        if noise_model is not None and bold_combined is not None:
+            bold_noisy = apply_bold_noise(bold_combined, noise_model, tr_s)
+            logger.debug("  BOLD noisy shape: %s | noise std: %.4e",
+                         bold_noisy.shape, float(np.std(bold_noisy - bold_combined)))
+
         # --- Plot: AdapTrans ON/OFF responses + boxcar train
-        if save_plots and apply_adaptrans:
+        if save_plots and apply_adaptrans_flag:
             time_1ms = np.arange(n_1ms)
             fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
             axes[0].plot(time_1ms, train, linewidth=0.6, color='gray')
@@ -337,8 +349,9 @@ def run_pipeline(
             "bold_on":                bold_on,
             "bold_off":               bold_off,
             "bold_combined":          bold_combined,
+            "bold_noisy":             bold_noisy,
             "apply_duration_gaussian": apply_duration_gaussian,
-            "apply_adaptrans":         apply_adaptrans,
+            "apply_adaptrans":         apply_adaptrans_flag,
             "rectify":                 rectify,
         }
 

@@ -42,7 +42,7 @@ contribute zeros to the assembled train.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import numpy as np
 
@@ -224,7 +224,7 @@ def generate_run_design(
     seq_id_fn: Callable,
     trial_duration_s: float = 5.0,
     opening_blank_s: float = 10.0,
-    iti_range_s: tuple = (1.0, 1.5),
+    iti_range_s: Union[float, tuple] = (1.0, 1.5),
     seed: Optional[int] = None,
 ) -> list:
     """Generate a run_design without running the PsychoPy experiment.
@@ -255,6 +255,8 @@ def generate_run_design(
         run_design ready for assemble_run_bold().
     """
     rng = np.random.default_rng(seed)
+    if isinstance(iti_range_s, (int, float)):
+        iti_range_s = (iti_range_s, iti_range_s)
 
     shuffled = list(base_trials)
     rng.shuffle(shuffled)
