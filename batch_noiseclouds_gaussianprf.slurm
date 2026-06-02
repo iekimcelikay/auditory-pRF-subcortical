@@ -32,14 +32,10 @@ module load Miniforge3
 # ---- Environment Setup -------------------------------------------------------
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 
-# ---- Stimulus directory ------------------------------------------------------
-WAV_DIR=$AUDITORY_PRF_ROOT/stimuli/produced/noiseclouds_gaussianprf_20260602_1915
-
 # Run the Python script
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python $AUDITORY_PRF_ROOT/examples/cochlea_noiseclouds_gaussianprf.py \
-    --wav-dir $WAV_DIR \
     --wav-index $SLURM_ARRAY_TASK_ID
 
 # End of job
