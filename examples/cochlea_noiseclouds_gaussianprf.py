@@ -144,7 +144,7 @@ def main() -> None:
         powerlaw="approximate",
         seed=0,
         fs_target=1000.0,
-        output_dir=str(PROJECT_ROOT / "models_output" / wav_dir.name),
+        output_dir=str(PROJECT_ROOT / "models_output" / wav_dir.name / f"wav{args.wav_index:03d}"),
         experiment_name=f"noiseclouds_gaussianprf_128ANF_wav{args.wav_index:03d}",
         save_formats=["npz"],
         save_mean_rates=False,
