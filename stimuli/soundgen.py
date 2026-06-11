@@ -387,11 +387,13 @@ class SoundGen:
             # Add ISI (silence) after tone
             sequence = np.concatenate((sequence, np.zeros(isi_samples)))
 
-        # Trim to exact total duration if specified
+        # Trim or pad with trailing silence to exact total duration if specified
         if total_duration is not None:
             total_samples = int(total_duration * self.sample_rate)
             if len(sequence) > total_samples:
                 sequence = sequence[:total_samples]
+            elif len(sequence) < total_samples:
+                sequence = np.concatenate((sequence, np.zeros(total_samples - len(sequence))))
 
         # If stereo is desired, duplicate the mono sequence into two channels
         if stereo:
