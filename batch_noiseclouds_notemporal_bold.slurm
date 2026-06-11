@@ -39,7 +39,8 @@ cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python $AUDITORY_PRF_ROOT/auditory_prf/prf_pipeline/full_pipeline_noiseclouds_notemporal.py \
     --cf $SLURM_ARRAY_TASK_ID \
-    --results-dir $RESULTS_DIR
+    --results-dir $RESULTS_DIR \
+    --output-dir $RESULTS_DIR/notemporal_bold
 
 # End of job
 echo "==================================="
