@@ -176,10 +176,10 @@ def run_pipeline(
     logger.info("Band centres (Hz): %s", band_centers_hz)
     logger.info("BW (oct)         : %.2f", bw_oct)
 
-    npz_files = sorted(_results_dir.rglob("*.npz"))
+    npz_files = sorted(_results_dir.glob("wav*/**/*.npz"))
     if not npz_files:
         raise FileNotFoundError(
-            f"No .npz files found in {_results_dir}. "
+            f"No .npz files found in {_results_dir}/wav*/. "
             "Run the cochlear simulation first and check results_dir."
         )
     logger.info("Found %d NPZ file(s)", len(npz_files))
