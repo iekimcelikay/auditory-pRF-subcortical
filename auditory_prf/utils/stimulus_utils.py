@@ -79,6 +79,81 @@ def greenwood_human(cf):
     return cfs
 
 
+def calc_gaussian_centers(
+    f_min_hz: float,
+    f_max_hz: float,
+    n_bands: int,
+    scale: str = 'greenwood',
+    species: str = 'human',
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Divide [f_min_hz, f_max_hz] into n_bands equal partitions on the chosen
+    scale. Return center frequencies and the derived sigma in octaves for each
+    band (half-width from center to partition edge).
+
+    Parameters
+    ----------
+    f_min_hz : float
+        Lower edge of the lowest band (Hz).
+    f_max_hz : float
+        Upper edge of the highest band (Hz).
+    n_bands : int
+        Number of Gaussian bands.
+    scale : {'greenwood', 'erb', 'log'}
+        Scale on which bands are equally spaced.
+    species : {'human', 'cat'}
+        Greenwood species (only used when scale='greenwood').
+
+    Returns
+    -------
+    centers_hz : np.ndarray, shape (n_bands,)
+        Center frequency of each band in Hz.
+    sigma_oct : np.ndarray, shape (n_bands,)
+        Half-width in octaves from each center to its partition edge.
+        Constant across bands for log scale; varies slightly for ERB/Greenwood.
+    """
+    if scale == 'greenwood':
+        if 'human' in species:
+            aA, k, a = 165.4, 0.88, 2.1
+        elif 'cat' in species:
+            aA, k, a = 456.0, 0.80, 2.1
+        else:
+            raise ValueError(f"Unknown species '{species}' for Greenwood scale.")
+        def to_scale(f):
+            return np.log10(f / aA + k) / a
+        def from_scale(x):
+            return aA * (10 ** (a * x) - k)
+
+    elif scale == 'erb':
+        # Glasberg & Moore (1990)
+        def to_scale(f):
+            return 21.4 * np.log10(4.37 * f / 1000.0 + 1.0)
+        def from_scale(e):
+            return (10 ** (e / 21.4) - 1.0) / 4.37 * 1000.0
+
+    elif scale == 'log':
+        def to_scale(f):
+            return np.log(f)
+        def from_scale(x):
+            return np.exp(x)
+
+    else:
+        raise ValueError(f"Unknown scale '{scale}'. Choose 'greenwood', 'erb', or 'log'.")
+
+    # n_bands+1 equally spaced boundary points on the chosen scale
+    boundaries_scale = np.linspace(to_scale(f_min_hz), to_scale(f_max_hz), n_bands + 1)
+    boundaries_hz = from_scale(boundaries_scale)
+
+    # Centers are midpoints of adjacent boundaries (in scale space)
+    center_scale = (boundaries_scale[:-1] + boundaries_scale[1:]) / 2
+    centers_hz = from_scale(center_scale)
+
+    # Sigma = half-width in octaves from center to its upper boundary
+    sigma_oct = np.log2(boundaries_hz[1:] / centers_hz)
+
+    return centers_hz, sigma_oct
+
+
 def generate_stimuli_params(freq_range, db_range):
     """
     Generate stimulus parameters for frequencies and dB levels.
