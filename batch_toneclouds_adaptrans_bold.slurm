@@ -37,7 +37,7 @@ RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/toneclouds_gaussianprf_20260612_015
 # Run the Python script
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
-conda run -n strf3.9 python $AUDITORY_PRF_ROOT/auditory_prf/prf_pipeline/full_pipeline_toneclouds_adaptrans.py \
+conda run -n strf3.9 python -m auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans \
     --cf $SLURM_ARRAY_TASK_ID \
     --results-dir $RESULTS_DIR \
     --output-dir $RESULTS_DIR/adaptrans_bold
