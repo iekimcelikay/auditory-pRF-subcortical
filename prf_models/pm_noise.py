@@ -1,9 +1,13 @@
 """BOLD fMRI noise model, ported from gari_pmNoise.m (vistasoft/gari toolbox).
 
-The noise has zero mean. Amplitude is expressed as a fraction of the BOLD
-signal (not scaled to absolute BOLD units here). Four components are
-supported: white noise, cardiac oscillation, respiratory oscillation, and
-low-frequency drift (DCT basis, matching SPM's spm_drift).
+The noise has zero mean. Amplitude parameters (white_amplitude, etc.) are
+calibrated against a reference BOLD signal with std == REFERENCE_BOLD_STD
+(3% PSC): ``apply_bold_noise()`` scales the generated noise by
+``np.std(bold) / REFERENCE_BOLD_STD``, so the 'low'/'mid'/'high' voxel presets
+reproduce the SNR levels reported in the prf-Synthesize validation figure
+(Lerma-Usabiaga et al.) regardless of the absolute scale of ``bold``. Four
+noise components are supported: white noise, cardiac oscillation, respiratory
+oscillation, and low-frequency drift (DCT basis, matching SPM's spm_drift).
 
 The parent ``pm`` object must expose:
     pm.TR                 : float  — repetition time (seconds)
@@ -108,6 +112,12 @@ _VOXEL_ALIASES = {
     'good': 'low', 'low': 'low', 'lownoise': 'low',
     'bad': 'high', 'high': 'high', 'highnoise': 'high',
 }
+
+# BOLD-signal std (as a fraction, i.e. 3% PSC) that the voxel preset amplitudes
+# above are calibrated against. apply_bold_noise() rescales the generated
+# noise so that np.std(bold) == REFERENCE_BOLD_STD reproduces the published
+# SNRs (low=5.29dB, mid=-0.51dB, high=-4.29dB; Lerma-Usabiaga et al. Fig 4).
+REFERENCE_BOLD_STD = 0.03
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +499,12 @@ class PmNoise:
 def apply_bold_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float) -> np.ndarray:
     """Add physiological and acquisition noise to a clean BOLD timeseries.
 
+    Noise amplitude is SNR-based: the raw noise realisation from
+    ``noise_model.compute()`` (in fractional units, e.g. 0.032 for 'mid'
+    white noise) is scaled by ``np.std(bold) / REFERENCE_BOLD_STD`` before
+    being added, so the 'low'/'mid'/'high' voxel presets reproduce their
+    target SNRs regardless of the absolute scale of ``bold``.
+
     Parameters
     ----------
     bold : np.ndarray, shape (n_tr,)
@@ -502,7 +518,8 @@ def apply_bold_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float) -> np.
     Returns
     -------
     np.ndarray, shape (n_tr,)
-        ``bold`` plus the generated noise realisation.
+        ``bold`` plus the generated noise realisation, scaled by
+        ``np.std(bold) / REFERENCE_BOLD_STD``.
     """
     n_tr = len(bold)
     noise_model.pm = PmAdapter(
@@ -511,7 +528,8 @@ def apply_bold_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float) -> np.
         time_points_series=np.arange(n_tr, dtype=float) * tr_s,
     )
     noise_model.compute()
-    return bold + noise_model.values_array
+    signal_scale = np.std(bold) / REFERENCE_BOLD_STD
+    return bold + noise_model.values_array * signal_scale
 
 
 if __name__ == '__main__':

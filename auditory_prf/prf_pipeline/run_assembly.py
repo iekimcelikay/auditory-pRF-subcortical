@@ -41,6 +41,7 @@ contribute zeros to the assembled train.
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Callable, Optional, Union
 
@@ -49,6 +50,7 @@ import numpy as np
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import apply_adaptrans
 from auditory_prf.prf_pipeline.hrf import convolve_hrf
 from auditory_prf.utils.condition_map import make_condition_map, SILENCE_SEQ_ID
+from prf_models.pm_noise import PmNoise, apply_bold_noise
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,74 @@ def assemble_run_bold(
         "bold_combined": rho * bold_on + bold_off,
         "t_tr":          np.arange(n_trs) * tr_s,
     }
+
+
+def apply_run_noise(
+    bold_combined: np.ndarray,
+    noise_model: Optional[PmNoise],
+    run_idx: int,
+    tr_s: float,
+) -> Optional[np.ndarray]:
+    """Apply BOLD noise to one run's timeseries, or pass through if no noise model.
+
+    Parameters
+    ----------
+    bold_combined : np.ndarray, shape (n_tr,)
+        Clean BOLD prediction for one run.
+    noise_model : PmNoise or None
+        Configured noise model. ``None`` means "no noise" — this function
+        returns ``None`` in that case so callers can skip saving a noisy
+        variant entirely.
+    run_idx : int
+        0-based run index within the experiment. Used to give each run an
+        independent-but-reproducible noise realization (see notes below).
+    tr_s : float
+        Repetition time in seconds (must match the TR used to produce
+        ``bold_combined``).
+
+    Returns
+    -------
+    np.ndarray, shape (n_tr,), or None
+        ``bold_combined`` plus a noise realization, or ``None`` if
+        ``noise_model is None``.
+
+    Notes
+    -----
+    ``PmNoise._make_rng()`` recreates ``np.random.RandomState(seed)`` from
+    scratch on every ``compute()`` call when ``seed`` is an integer. Reusing
+    one ``PmNoise`` instance across runs with a fixed seed would therefore
+    produce an *identical* noise trace for every run. To avoid this, a
+    shallow copy of ``noise_model`` is made and its ``seed`` is offset by
+    ``run_idx`` before calling ``apply_bold_noise()``. With ``seed='random'``
+    or ``seed='none'``, the offset is skipped — each ``compute()`` call
+    already draws fresh entropy, or noise is zero.
+    """
+    if noise_model is None:
+        return None
+    run_noise = copy.copy(noise_model)
+    if isinstance(run_noise.seed, (int, np.integer)):
+        run_noise.seed = run_noise.seed + run_idx
+    return apply_bold_noise(bold_combined, run_noise, tr_s)
+
+
+def parse_noise_seed_arg(value: str) -> Union[int, str]:
+    """Parse a ``--noise_seed`` CLI string into a ``PmNoise``-compatible seed.
+
+    Parameters
+    ----------
+    value : str
+        Raw CLI argument, e.g. ``"42"``, ``"random"``, or ``"none"``.
+
+    Returns
+    -------
+    int or str
+        ``int(value)`` if ``value`` is an integer string, otherwise ``value``
+        unchanged (passed straight through to ``PmNoise(seed=...)``).
+    """
+    try:
+        return int(value)
+    except ValueError:
+        return value
 
 
 def generate_run_design(
