@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 import numpy as np
@@ -5,6 +6,9 @@ from scipy.signal import decimate
 #19/02/2026
 # Adapted from: https://github.com/urancon/deepSTRF/blob/9be7ca5698ab856990458834af8a2e412480823e/deepSTRF/models/prefiltering.py
 # deepSTRF/models/prefiltering.py
+
+logger = logging.getLogger(__name__)
+
 
 def downsample_AN(an_output: np.ndarray, factor: int) -> np.ndarray:
     """
@@ -184,15 +188,15 @@ def apply_adaptrans(an_output: np.ndarray,
         if cf_range_hz is None:
             cf_range_hz = (float(np.min(CFs_Hz)), float(np.max(CFs_Hz)))
         tau_vals = np.array([cf_to_tau_ms(cf, cf_range_hz, tau_range_ms) for cf in CFs_Hz])
-    print(f"Tau for this CF is: {tau_vals}")
+    logger.debug("Tau values (ms) for these CFs: %s", tau_vals)
     a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)
 
     # auto-set K to cover 3x the longest time constant if not specified
     if K is None:
         max_tau_samples = np.max(tau_vals) / dt_ms        # time constant in samples
         K = int(np.ceil(3 * max_tau_samples))             # cover 3x the longest tau
-        print(f"Auto-set K={K} samples "
-            f"(3 × max tau={np.max(tau_vals):.1f}ms / dt={dt_ms}ms)")
+        logger.debug("Auto-set K=%d samples (3 x max tau=%.1fms / dt=%sms)",
+                      K, np.max(tau_vals), dt_ms)
 
     out_ON  = np.zeros((N_CFs, T))
     out_OFF = np.zeros((N_CFs, T))
@@ -209,16 +213,13 @@ def apply_adaptrans(an_output: np.ndarray,
         raw_ON  = np.convolve(padded, kernel_ON,  mode='valid')[:T]
         raw_OFF = np.convolve(padded, kernel_OFF, mode='valid')[:T]
 
-        # ── ADD THIS ─────────────────────────────────────────────────
         onset_idx = np.argmax(np.abs(np.diff(signal)) > 0)  # first transition
-        print(f"CF {CFs_Hz[i]:.0f} Hz | tau={tau_vals[i]:.1f}ms | K={K}")
-        print(f"  signal max:     {signal.max():.4e}")
-        print(f"  raw_ON  max:    {raw_ON.max():.4e}  at t={raw_ON.argmax()}")
-        print(f"  raw_ON  onset:  {raw_ON[onset_idx]:.4e}  (should be ≈ signal.max())")
-        off_idx = onset_idx + int((signal > 0).sum())
-        print(f"  raw_OFF offset: {raw_OFF[off_idx]:.4e}")
-        # ─────────────────────────────────────────────────────────────
-
+        off_idx   = onset_idx + int((signal > 0).sum())
+        logger.debug("CF %.0f Hz | tau=%.1fms | K=%d", CFs_Hz[i], tau_vals[i], K)
+        logger.debug("  signal max:     %.4e", signal.max())
+        logger.debug("  raw_ON  max:    %.4e  at t=%d", raw_ON.max(), raw_ON.argmax())
+        logger.debug("  raw_ON  onset:  %.4e  (should be ~= signal.max())", raw_ON[onset_idx])
+        logger.debug("  raw_OFF offset: %.4e", raw_OFF[off_idx])
 
         out_ON[i]  = np.convolve(padded, kernel_ON,  mode='valid')[:T]
         out_OFF[i] = np.convolve(padded, kernel_OFF, mode='valid')[:T]

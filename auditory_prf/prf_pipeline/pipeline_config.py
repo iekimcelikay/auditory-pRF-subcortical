@@ -50,7 +50,7 @@ class PipelineConfig:
     """
 
     cf_hz: float
-    cf_hz_array: np.ndarray = field(default=None)
+    cf_hz_array: Optional[np.ndarray] = field(default=None)
     alpha: float = 2.0
     pref_dur_ms: float = 200.0
     sigma_dur_ms: float = 20.0

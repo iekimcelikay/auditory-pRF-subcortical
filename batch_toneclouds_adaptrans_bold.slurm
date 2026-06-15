@@ -35,15 +35,20 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/toneclouds_gaussianprf_20260612_0155
 
 # Run the Python script
-# One job per CF. The clean run (Phase 1/2 + AdapTrans + HRF) is computed once;
-# --noise_voxels adds cheap noisy variants (run_XX_noisy_<level>) on top of the
-# same clean bold_combined, without re-running the pipeline per noise level.
+# One job per CF. Phase 1 (cochlea load/power-law/chunking) is computed once
+# per CF; --tau_ms_sweep then reruns Phase 2 (AdapTrans + HRF) for each tau
+# value, saving one npz per (CF, tau) combo. --noise_voxels adds cheap noisy
+# variants (run_XX_noisy_<level>) on top of each combo's clean bold_combined,
+# without re-running the pipeline per noise level.
+# Tau values (35, 75, 150, 488 ms) are picked from TONE_ON_MS (shortest,
+# short-mid, mid, longest tone durations) as exemplary test points.
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python -m auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans \
     --cf $SLURM_ARRAY_TASK_ID \
     --results-dir $RESULTS_DIR \
     --output-dir $RESULTS_DIR/adaptrans_bold \
+    --tau_ms_sweep 35 75 150 488 \
     --noise_voxels low mid high \
     --noise_seed $((100 + SLURM_ARRAY_TASK_ID))
 
