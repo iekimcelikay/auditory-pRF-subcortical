@@ -85,14 +85,14 @@ def _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir):
     _save_fig(fig, plot_dir, f"02_chunk_mean_rates_{seq_id}.png")
 
 
-def _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir):
+def _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir, combo_suffix=""):
     """Phase 2 plot: assembled boxcar train + AdapTrans ON/OFF for one run."""
     n_1ms = len(result["full_train"])
     time_1ms = np.arange(n_1ms)
     fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
     axes[0].plot(time_1ms, result["full_train"], linewidth=0.6, color='gray')
     axes[0].set_ylabel("Amplitude")
-    axes[0].set_title(f"Assembled boxcar train — run {run_idx + 1:02d}")
+    axes[0].set_title(f"Assembled boxcar train — run {run_idx + 1:02d}{combo_suffix}")
     axes[1].plot(time_1ms, result["on_response"], linewidth=0.6, color='crimson')
     axes[1].set_ylabel("ON response")
     axes[1].set_title(f"AdapTrans ON (w={w}, CF={cf_hz:.0f} Hz)")
@@ -100,16 +100,16 @@ def _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir):
     axes[2].set_ylabel("OFF response")
     axes[2].set_xlabel("Time (ms)")
     axes[2].set_title("AdapTrans OFF")
-    _save_fig(fig, plot_dir, f"03_adaptrans_run{run_idx + 1:02d}.png")
+    _save_fig(fig, plot_dir, f"03_adaptrans_run{run_idx + 1:02d}{combo_suffix}.png")
 
 
-def _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir):
+def _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir, combo_suffix=""):
     """Phase 2 plot: BOLD ON / OFF / combined for one run."""
     t_tr = result["t_tr"]
     fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
     axes[0].plot(t_tr, result["bold_on"], 'o-', ms=4, color='crimson')
     axes[0].set_ylabel("BOLD (a.u.)")
-    axes[0].set_title(f"BOLD ON — run {run_idx + 1:02d} | CF={cf_hz:.0f} Hz | TR={tr_s:.2f}s")
+    axes[0].set_title(f"BOLD ON — run {run_idx + 1:02d}{combo_suffix} | CF={cf_hz:.0f} Hz | TR={tr_s:.2f}s")
     axes[1].plot(t_tr, result["bold_off"], 'o-', ms=4, color='royalblue')
     axes[1].set_ylabel("BOLD (a.u.)")
     axes[1].set_title("BOLD OFF")
@@ -117,13 +117,13 @@ def _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir):
     axes[2].set_ylabel("BOLD (a.u.)")
     axes[2].set_xlabel("Time (s)")
     axes[2].set_title(f"BOLD combined (rho * ON + OFF, rho={rho})")
-    _save_fig(fig, plot_dir, f"04_bold_run{run_idx + 1:02d}.png")
+    _save_fig(fig, plot_dir, f"04_bold_run{run_idx + 1:02d}{combo_suffix}.png")
 
 
-def _save_run_plots(run_idx, result, cf_hz, w, rho, tr_s, plot_dir):
+def _save_run_plots(run_idx, result, cf_hz, w, rho, tr_s, plot_dir, combo_suffix=""):
     """Save both Phase 2 (per-run) diagnostic plots."""
-    _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir)
-    _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir)
+    _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir, combo_suffix)
+    _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir, combo_suffix)
 
 
 def _strip_signal_arrays(result: dict) -> dict:
@@ -136,26 +136,43 @@ def _strip_signal_arrays(result: dict) -> dict:
             if k not in ("full_train", "on_response", "off_response")}
 
 
+def _format_combo_suffix(tau_ms: Optional[float], w: float, rho: float) -> str:
+    """Build a filename/title suffix identifying one AdapTrans param combo.
+
+    e.g. ``_tau050_w0p80_rho1p00``, or ``_tauauto_w0p80_rho1p00`` if
+    ``tau_ms is None`` (per-CF tau derived via ``cf_to_tau_ms``).
+    """
+    tau_str = "tauauto" if tau_ms is None else f"tau{tau_ms:03.0f}"
+    w_str   = f"w{w:.2f}".replace(".", "p")
+    rho_str = f"rho{rho:.2f}".replace(".", "p")
+    return f"_{tau_str}_{w_str}_{rho_str}"
+
+
 # ── multiprocessing worker (module-level so it is picklable) ─────────────────
 _worker: dict = {}
 
 
-def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s, noise_model,
-                  apply_adaptrans_flag, w, K, rectify, rho, save_plots, plot_dir):
+def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s, noise_models,
+                  apply_adaptrans_flag, w, K, rectify, rho, tau_ms, cf_range_hz, tau_range_ms,
+                  save_plots, plot_dir, combo_suffix):
     _worker["per_seq"]              = per_seq
     _worker["hrf_kernel"]           = hrf_kernel
     _worker["total_run_dur_s"]      = total_run_dur_s
     _worker["cf_hz"]                = cf_hz
     _worker["tr_s"]                 = tr_s
     _worker["signal_dt_s"]          = signal_dt_s
-    _worker["noise_model"]          = noise_model
+    _worker["noise_models"]         = noise_models
     _worker["apply_adaptrans_flag"] = apply_adaptrans_flag
     _worker["w"]                    = w
     _worker["K"]                    = K
     _worker["rectify"]              = rectify
     _worker["rho"]                  = rho
+    _worker["tau_ms"]                = tau_ms
+    _worker["cf_range_hz"]           = cf_range_hz
+    _worker["tau_range_ms"]          = tau_range_ms
     _worker["save_plots"]           = save_plots
     _worker["plot_dir"]             = plot_dir
+    _worker["combo_suffix"]         = combo_suffix
 
 
 def _assemble_one(task: tuple) -> tuple:
@@ -173,14 +190,18 @@ def _assemble_one(task: tuple) -> tuple:
         apply_adaptrans_flag = _worker["apply_adaptrans_flag"],
         rectify              = _worker["rectify"],
         rho                  = _worker["rho"],
+        tau_ms               = _worker["tau_ms"],
+        cf_range_hz          = _worker["cf_range_hz"],
+        tau_range_ms         = _worker["tau_range_ms"],
     )
-    bold_noisy = apply_run_noise(
-        result["bold_combined"], _worker["noise_model"], run_idx, _worker["tr_s"]
-    )
+    bold_noisy_by_level = {
+        level: apply_run_noise(result["bold_combined"], noise_model, run_idx, _worker["tr_s"])
+        for level, noise_model in _worker["noise_models"].items()
+    }
     if _worker["save_plots"]:
         _save_run_plots(run_idx, result, _worker["cf_hz"], _worker["w"], _worker["rho"],
-                        _worker["tr_s"], _worker["plot_dir"])
-    return run_idx, run_design, _strip_signal_arrays(result), bold_noisy
+                        _worker["tr_s"], _worker["plot_dir"], _worker["combo_suffix"])
+    return run_idx, run_design, _strip_signal_arrays(result), bold_noisy_by_level
 
 
 # ── tone-cloud seq_id scheme ───────────────────────────────────────────────────
@@ -249,6 +270,8 @@ ADAPTRANS_W       = 0.8
 ADAPTRANS_K       = None    # auto-set (3x longest CF time constant)
 ADAPTRANS_RECTIFY = True
 BOLD_RHO          = 1.0
+ADAPTRANS_TAU_MS       = None           # None -> derive from cf_hz via cf_to_tau_ms
+ADAPTRANS_TAU_RANGE_MS = (10.0, 500.0)  # lowest CF -> 500ms, highest CF -> 10ms
 
 
 def run_pipeline(
@@ -282,13 +305,23 @@ def run_pipeline(
         K: Optional[int] = ADAPTRANS_K,
         rectify: bool = ADAPTRANS_RECTIFY,
         rho: float = BOLD_RHO,
+        tau_ms: Optional[float] = ADAPTRANS_TAU_MS,
+        cf_range_hz: Optional[tuple] = None,
+        tau_range_ms: tuple = ADAPTRANS_TAU_RANGE_MS,
+        param_grid: Optional[list[dict]] = None,
         # plotting
         save_plots: bool = True,
         # parallelism
         n_workers: int = 1,
         # noise
-        noise_model: Optional[PmNoise] = None,
+        noise_models: Optional[dict[str, PmNoise]] = None,
 ):
+    noise_models = noise_models or {}
+    # param_grid: list of {"tau_ms", "w", "rho"} combos to sweep. Phase 1 runs
+    # once regardless; Phase 2 (AdapTrans + HRF) and the saved npz run once per
+    # combo, with (tau_ms, w, rho) encoded in the filename (_format_combo_suffix).
+    if param_grid is None:
+        param_grid = [{"tau_ms": tau_ms, "w": w, "rho": rho}]
     _output_dir = output_dir or Path(f"./output/{exp_name}_toneclouds_adaptrans")
     LoggingConfigurator(
         output_dir=_output_dir,
@@ -308,8 +341,8 @@ def run_pipeline(
     logger.info("Experiment       : %s", exp_name)
     logger.info("Results dir      : %s", _results_dir)
     logger.info("Band centres (Hz): %s", band_centers_hz)
-    logger.info("AdapTrans        : apply=%s, w=%.2f, K=%s, rectify=%s, rho=%.2f",
-                 apply_adaptrans_flag, w, K, rectify, rho)
+    logger.info("AdapTrans        : apply=%s, K=%s, rectify=%s",
+                 apply_adaptrans_flag, K, rectify)
 
     npz_files = sorted(_results_dir.glob("wav*/**/*.npz"))
     if not npz_files:
@@ -318,6 +351,14 @@ def run_pipeline(
             "Run the cochlear simulation first and check results_dir."
         )
     logger.info("Found %d NPZ file(s)", len(npz_files))
+
+    if cf_range_hz is None:
+        cf_list = np.asarray(ResultSaver(npz_files[0].parent).load_npz(npz_files[0].name)["cf_list"])
+        cf_range_hz = (float(cf_list.min()), float(cf_list.max()))
+    logger.info("AdapTrans tau    : cf_range_hz=(%.1f, %.1f) Hz, tau_range_ms=%s",
+                 cf_range_hz[0], cf_range_hz[1], tau_range_ms)
+    logger.info("Param grid       : %d combo(s) — %s", len(param_grid), param_grid)
+    logger.info("Noise levels     : %s", list(noise_models.keys()) or "none")
 
     # ── HRF kernel (built once) ───────────────────────────────────────────────
     signal_dt_s = 1e-3
@@ -404,7 +445,6 @@ def run_pipeline(
 
     # ── Phase 2: per-run assembly ──────────────────────────────────────────────
     cf_hz_used = next(iter(per_seq.values()))["cf_hz"]
-    all_runs: dict = {}
 
     _designs = run_designs if run_designs is not None else [
         generate_run_design(
@@ -416,82 +456,103 @@ def run_pipeline(
         )
         for i in range(n_runs)
     ]
-    logger.info("Phase 2: assembling %d run(s) with %d worker(s).",
-                len(_designs), n_workers)
-
     tasks = list(enumerate(_designs))
-
-    if n_workers > 1:
-        with Pool(
-            processes=n_workers,
-            initializer=_worker_init,
-            initargs=(per_seq, hrf_kernel, total_run_dur_s,
-                      cf_hz_used, tr_s, signal_dt_s, noise_model,
-                      apply_adaptrans_flag, w, K, rectify, rho,
-                      save_plots, plot_dir),
-        ) as pool:
-            results = pool.map(_assemble_one, tasks)
-    else:
-        results = []
-        for run_idx, run_design in tasks:
-            result = assemble_run_bold(
-                per_seq=per_seq,
-                run_design=run_design,
-                total_run_dur_s=total_run_dur_s,
-                hrf_kernel=hrf_kernel,
-                cf_hz=cf_hz_used,
-                tr_s=tr_s,
-                signal_dt_s=signal_dt_s,
-                w=w,
-                K=K,
-                apply_adaptrans_flag=apply_adaptrans_flag,
-                rectify=rectify,
-                rho=rho,
-            )
-            bold_noisy = apply_run_noise(result["bold_combined"], noise_model, run_idx, tr_s)
-            if save_plots:
-                _save_run_plots(run_idx, result, cf_hz_used, w, rho, tr_s, plot_dir)
-            results.append((run_idx, run_design, _strip_signal_arrays(result), bold_noisy))
-
-    for run_idx, run_design, result, bold_noisy in results:
-        all_runs[f"run_{run_idx + 1:02d}"] = {
-            "run_design":    run_design,
-            "bold_combined": result["bold_combined"],
-            "bold_on":       result["bold_on"],
-            "bold_off":      result["bold_off"],
-            "bold_noisy":    bold_noisy,
-            "t_tr":          result["t_tr"],
-            "seed":          base_seed + run_idx if run_designs is None else None,
-        }
-    if all_runs:
-        logger.info("  BOLD shape: %s", next(iter(all_runs.values()))["bold_combined"].shape)
-
-    # ── Save ──────────────────────────────────────────────────────────────────
     saver = ResultSaver(_output_dir)
-    save_dict = {
-        "exp_name":             exp_name,
-        "cf":                   cf,
-        "alpha":                alpha,
-        "tr_s":                 tr_s,
-        "w":                    w,
-        "K":                    str(K),
-        "rectify":              rectify,
-        "rho":                  rho,
-        "apply_adaptrans_flag": apply_adaptrans_flag,
-        **{k: v["bold_combined"] for k, v in all_runs.items()},
-        **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
-        **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},
-    }
-    if noise_model is not None:
-        save_dict.update({f"{k}_noisy": v["bold_noisy"] for k, v in all_runs.items()})
-        save_dict["noise_seed"] = str(noise_model.seed)
-    saver.save_npz(
-        save_dict,
-        f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}_bold.npz",
-    )
-    logger.info("Saved BOLD to %s", _output_dir)
+    all_results: dict = {}
 
-    return all_runs
+    for combo in param_grid:
+        combo_tau_ms, combo_w, combo_rho = combo["tau_ms"], combo["w"], combo["rho"]
+        combo_suffix = _format_combo_suffix(combo_tau_ms, combo_w, combo_rho)
+        logger.info("Phase 2: assembling %d run(s) with %d worker(s) | combo%s",
+                    len(_designs), n_workers, combo_suffix)
+
+        all_runs: dict = {}
+
+        if n_workers > 1:
+            with Pool(
+                processes=n_workers,
+                initializer=_worker_init,
+                initargs=(per_seq, hrf_kernel, total_run_dur_s,
+                          cf_hz_used, tr_s, signal_dt_s, noise_models,
+                          apply_adaptrans_flag, combo_w, K, rectify, combo_rho,
+                          combo_tau_ms, cf_range_hz, tau_range_ms,
+                          save_plots, plot_dir, combo_suffix),
+            ) as pool:
+                results = pool.map(_assemble_one, tasks)
+        else:
+            results = []
+            for run_idx, run_design in tasks:
+                result = assemble_run_bold(
+                    per_seq=per_seq,
+                    run_design=run_design,
+                    total_run_dur_s=total_run_dur_s,
+                    hrf_kernel=hrf_kernel,
+                    cf_hz=cf_hz_used,
+                    tr_s=tr_s,
+                    signal_dt_s=signal_dt_s,
+                    w=combo_w,
+                    K=K,
+                    apply_adaptrans_flag=apply_adaptrans_flag,
+                    rectify=rectify,
+                    rho=combo_rho,
+                    tau_ms=combo_tau_ms,
+                    cf_range_hz=cf_range_hz,
+                    tau_range_ms=tau_range_ms,
+                )
+                bold_noisy_by_level = {
+                    level: apply_run_noise(result["bold_combined"], noise_model, run_idx, tr_s)
+                    for level, noise_model in noise_models.items()
+                }
+                if save_plots:
+                    _save_run_plots(run_idx, result, cf_hz_used, combo_w, combo_rho, tr_s,
+                                    plot_dir, combo_suffix)
+                results.append((run_idx, run_design, _strip_signal_arrays(result), bold_noisy_by_level))
+
+        for run_idx, run_design, result, bold_noisy_by_level in results:
+            all_runs[f"run_{run_idx + 1:02d}"] = {
+                "run_design":         run_design,
+                "bold_combined":      result["bold_combined"],
+                "bold_on":            result["bold_on"],
+                "bold_off":           result["bold_off"],
+                "bold_noisy_by_level": bold_noisy_by_level,
+                "t_tr":               result["t_tr"],
+                "seed":          base_seed + run_idx if run_designs is None else None,
+            }
+        if all_runs:
+            logger.info("  BOLD shape: %s", next(iter(all_runs.values()))["bold_combined"].shape)
+
+        # ── Save ──────────────────────────────────────────────────────────────
+        save_dict = {
+            "exp_name":             exp_name,
+            "cf":                   cf,
+            "alpha":                alpha,
+            "tr_s":                 tr_s,
+            "w":                    combo_w,
+            "K":                    str(K),
+            "rectify":              rectify,
+            "rho":                  combo_rho,
+            "apply_adaptrans_flag": apply_adaptrans_flag,
+            "tau_ms":               str(combo_tau_ms),
+            "cf_range_hz":          cf_range_hz,
+            "tau_range_ms":         tau_range_ms,
+            **{k: v["bold_combined"] for k, v in all_runs.items()},
+            **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
+            **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},
+        }
+        for level, noise_model in noise_models.items():
+            save_dict.update({
+                f"{k}_noisy_{level}": v["bold_noisy_by_level"][level] for k, v in all_runs.items()
+            })
+            save_dict[f"noise_seed_{level}"] = str(noise_model.seed)
+        saver.save_npz(
+            save_dict,
+            f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}{combo_suffix}_bold.npz",
+        )
+        logger.info("Saved BOLD to %s", _output_dir)
+
+        all_results[combo_suffix] = all_runs
+
+    return all_results
 
 
 if __name__ == "__main__":
@@ -514,30 +575,70 @@ if __name__ == "__main__":
                              f"(default: {ADAPTRANS_RECTIFY}). Use --no-rectify to disable.")
     parser.add_argument("--no-adaptrans", action="store_true",
                         help="Disable AdapTrans (use the assembled boxcar train directly).")
+    parser.add_argument("--tau_ms", type=float, default=ADAPTRANS_TAU_MS,
+                        help="Fixed AdapTrans time constant (ms) for every CF, "
+                             "bypassing cf_to_tau_ms. E.g. 50 for quick tests. "
+                             "Default: derive per-CF from cf_to_tau_ms.")
+    parser.add_argument("--tau_range_ms", type=float, nargs=2,
+                        default=ADAPTRANS_TAU_RANGE_MS, metavar=("TAU_MIN_MS", "TAU_MAX_MS"),
+                        help="Time-constant range (ms) for cf_to_tau_ms: lowest CF -> "
+                             f"TAU_MAX_MS, highest CF -> TAU_MIN_MS. Default: {ADAPTRANS_TAU_RANGE_MS}. "
+                             "Ignored if --tau_ms is given.")
+    parser.add_argument("--tau_ms_sweep", type=str, nargs="+", default=None,
+                        help="Sweep multiple AdapTrans tau_ms values (overrides --tau_ms). "
+                             "Each value is a float (ms), or 'auto'/'none' for the per-CF "
+                             "cf_to_tau_ms mapping. E.g. --tau_ms_sweep 50 100 auto. "
+                             "Phase 1 runs once; Phase 2 + a separate npz are produced "
+                             "per (tau_ms, w, rho) combo.")
+    parser.add_argument("--w_sweep", type=float, nargs="+", default=None,
+                        help="Sweep multiple AdapTrans w values (overrides --w).")
+    parser.add_argument("--rho_sweep", type=float, nargs="+", default=None,
+                        help="Sweep multiple BOLD rho values (overrides --rho).")
     parser.add_argument("--no-plots", action="store_true",
                         help="Disable intermediate diagnostic plots.")
-    parser.add_argument("--noise_voxel", choices=["none", "low", "mid", "high"],
-                        default="none",
-                        help="BOLD noise preset (PmNoise voxel level). "
-                             "'none' = no noise (default).")
+    parser.add_argument("--noise_voxels", nargs="+", choices=["none", "low", "mid", "high"],
+                        default=["none"],
+                        help="BOLD noise preset(s) (PmNoise voxel level). Pass multiple to "
+                             "compute several noisy variants from the same clean run "
+                             "(e.g. --noise_voxels low mid high). 'none' = no noisy variant "
+                             "(default).")
     parser.add_argument("--noise_seed", type=str, default="random",
-                        help="PmNoise seed: an integer for reproducible noise, "
-                             "'random' (default), or 'none'/'nonoise'.")
+                        help="PmNoise seed shared across all --noise_voxels levels "
+                             "(each run's seed is still offset by run index): an integer "
+                             "for reproducible noise, 'random' (default), or 'none'/'nonoise'.")
     args = parser.parse_args()
 
-    _noise_model = None
-    if args.noise_voxel != "none":
-        _noise_model = PmNoise(voxel=args.noise_voxel, seed=parse_noise_seed_arg(args.noise_seed))
+    _noise_models = {
+        level: PmNoise(voxel=level, seed=parse_noise_seed_arg(args.noise_seed))
+        for level in args.noise_voxels if level != "none"
+    }
+
+    # Build the (tau_ms, w, rho) sweep grid. Each *_sweep flag falls back to
+    # the single-value --tau_ms/--w/--rho default when not given, so the
+    # no-sweep case still produces a one-combo grid (with a filename suffix).
+    import itertools
+
+    def _parse_tau_sweep_value(value: str) -> Optional[float]:
+        return None if value.lower() in ("auto", "none") else float(value)
+
+    _tau_ms_values = ([_parse_tau_sweep_value(v) for v in args.tau_ms_sweep]
+                       if args.tau_ms_sweep else [args.tau_ms])
+    _w_values   = args.w_sweep   if args.w_sweep   else [args.w]
+    _rho_values = args.rho_sweep if args.rho_sweep else [args.rho]
+    _param_grid = [
+        {"tau_ms": t, "w": w, "rho": r}
+        for t, w, r in itertools.product(_tau_ms_values, _w_values, _rho_values)
+    ]
 
     run_pipeline(
         cf=args.cf,
         results_dir=Path(args.results_dir) if args.results_dir else None,
         output_dir=Path(args.output_dir)   if args.output_dir   else None,
         alpha=args.alpha,
-        w=args.w,
-        rho=args.rho,
         rectify=args.rectify,
         apply_adaptrans_flag=not args.no_adaptrans,
+        tau_range_ms=tuple(args.tau_range_ms),
+        param_grid=_param_grid,
         save_plots=not args.no_plots,
-        noise_model=_noise_model,
+        noise_models=_noise_models,
     )

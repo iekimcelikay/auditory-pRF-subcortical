@@ -107,6 +107,9 @@ def assemble_run_bold(
     apply_adaptrans_flag: bool = True,
     rectify: bool = False,
     rho: float = 1.0,
+    tau_ms: Optional[float] = None,
+    cf_range_hz: Optional[tuple] = None,
+    tau_range_ms: tuple = (10.0, 500.0),
 ) -> dict:
     """Assemble a full-run BOLD timeseries from per-stimulus boxcar trains.
 
@@ -146,6 +149,16 @@ def assemble_run_bold(
         ON-to-OFF BOLD weighting ratio.  ``bold_combined = rho * bold_on + bold_off``.
         rho > 1: onset-dominated.  rho = 1: equal weights (default).  rho < 1:
         offset-dominated.  Free parameter during model fitting.
+    tau_ms : float or None
+        Fixed AdapTrans time constant (ms), passed straight to
+        ``apply_adaptrans``. If None, tau is derived from ``cf_hz`` via
+        ``cf_to_tau_ms`` using ``cf_range_hz``/``tau_range_ms``.
+    cf_range_hz : tuple of (min_hz, max_hz) or None
+        Experiment-wide CF range used by ``cf_to_tau_ms`` to map ``cf_hz`` to
+        a tau. Required (non-None) unless ``tau_ms`` is given — a single
+        ``cf_hz`` cannot define a range on its own.
+    tau_range_ms : tuple of (tau_min_ms, tau_max_ms)
+        Time-constant range passed to ``cf_to_tau_ms``. Default (10.0, 500.0).
 
     Returns
     -------
@@ -197,6 +210,9 @@ def assemble_run_bold(
             K=K,
             pad_value=0.0,
             rectify=rectify,
+            tau_ms=tau_ms,
+            cf_range_hz=cf_range_hz,
+            tau_range_ms=tau_range_ms,
         )
         on_response  = on_off[0, 0, :]
         off_response = on_off[1, 0, :]

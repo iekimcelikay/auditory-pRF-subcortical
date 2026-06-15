@@ -55,7 +55,6 @@ def load_cf_timecourse(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, int,
         for npz_path in sorted(results_dir.glob("*.npz")):     # ← sequence axis
             for cf in cf_values:                               # ← CF axis
                 timecourse, time_axis, i_cf, cf_hz, seq_id = load_cf_timecourse(npz_path, cf)
-                result = apply_powerlaw_cf(timecourse, alpha)
 
     Parameters
     ----------

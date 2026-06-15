@@ -21,7 +21,7 @@ from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
 from auditory_prf.utils.cochlea_loader_functions import load_cochlea_results, organize_for_eachtone_allCFs, resolve_results_dir
 from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_cf_timecourse, load_population_psth
-from auditory_prf.prf_pipeline.powerlaw_function import apply_power_normalize, apply_powerlaw_cf, apply_powerlaw_population
+from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 
 # Duration (scalar)
@@ -47,7 +47,7 @@ from prf_models.pm_noise import PmNoise, apply_bold_noise
 # ---- 3. Apply Sharpening with alpha (Lateral Inhibition stage)
 # script: powerlaw_function.py
 #
-# apply_power_normalize(exp_name, results_dir, alpha, out_dir=None)
+# apply_powerlaw_population(population_psth, alpha) -> sharpened population PSTH
 # _____________________________________________________________________________
 # ---- 4. Tone-ON chunk timecourse
 # script: chunk_timecourse.py
@@ -78,9 +78,8 @@ from prf_models.pm_noise import PmNoise, apply_bold_noise
 #===== 2. EXTRACT ONE TIME COURSE
 # get_cf_timecourse()
 #===== 3. APPLY SHARPENING (LATERAL INHIBITION) WITH ALPHA
-# apply_power_normalize()
-
-# sharpened = apply_powerlaw_cf(timecourse, alpha)
+# sharpened_pop = apply_powerlaw_population(population_psth, alpha)
+# sharpened = sharpened_pop[cf_index, :]
 #
 #
 #===== 4. CUT TO CHUNKS FOR TONE-ON, TAKE THE AVERAGE FIRING RATE = 1 VALUE PER TONE

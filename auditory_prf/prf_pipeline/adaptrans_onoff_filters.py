@@ -33,12 +33,35 @@ def tau_to_a(tau_ms: float, dt_ms: float) -> float:
     return np.exp(-dt_ms / tau_ms)
 
 
-def willmore_tau(cf_hz: float) -> float:
-    # Original Willmore: cortical, 80-290ms range → too slow for subcortex
-    # return 500.0 - 105.0 * np.log10(cf_hz)
+def cf_to_tau_ms(cf_hz: float, cf_range_hz: tuple, tau_range_ms: tuple = (10.0, 500.0)) -> float:
+    """Map a CF (Hz) to an AdapTrans time constant (ms), log-linear in CF.
 
-    # Rescaled for subcortex: same shape, compressed to ~10-50ms range
-    return (500.0 - 105.0 * np.log10(cf_hz)) * 0.15
+    Same decreasing-with-frequency shape as Willmore et al. (2016), but
+    re-anchored so the lowest CF in ``cf_range_hz`` maps to
+    ``tau_range_ms[1]`` (longest tau) and the highest CF maps to
+    ``tau_range_ms[0]`` (shortest tau).
+
+    Parameters
+    ----------
+    cf_hz : float
+        Characteristic frequency in Hz.
+    cf_range_hz : tuple of (min_hz, max_hz)
+        CF range spanned by the experiment.
+    tau_range_ms : tuple of (tau_min_ms, tau_max_ms)
+        Time-constant range. Default (10.0, 500.0).
+
+    Returns
+    -------
+    tau_ms : float
+    """
+    cf_min_hz, cf_max_hz = cf_range_hz
+    tau_min_ms, tau_max_ms = tau_range_ms
+    if cf_max_hz == cf_min_hz:
+        return float(np.mean(tau_range_ms))
+    cf_clamped = np.clip(cf_hz, cf_min_hz, cf_max_hz)
+    frac = ((np.log10(cf_clamped) - np.log10(cf_min_hz))
+            / (np.log10(cf_max_hz) - np.log10(cf_min_hz)))  # 0 at low CF, 1 at high CF
+    return tau_max_ms - frac * (tau_max_ms - tau_min_ms)
 
 
 def build_ON_kernel(a: float, w: float, K: int) -> np.ndarray:
@@ -104,7 +127,10 @@ def apply_adaptrans(an_output: np.ndarray,
                     w: float = 0.8,
                     K: Optional[int] = None,
                     rectify: bool = False,
-                    pad_value: Optional[float] = None) -> np.ndarray:
+                    pad_value: Optional[float] = None,
+                    tau_ms: Optional[float] = None,
+                    cf_range_hz: Optional[tuple] = None,
+                    tau_range_ms: tuple = (10.0, 500.0)) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
 
@@ -131,6 +157,17 @@ def apply_adaptrans(an_output: np.ndarray,
         If None (default), replicates signal[0] of each channel (standard
         causal padding). Pass 0.0 for isolated per-tone signals that start
         with non-zero amplitude at t=0 to avoid suppressing the first onset.
+    tau_ms : float or None
+        If given, use this fixed time constant (ms) for every CF, bypassing
+        ``cf_to_tau_ms``. Useful for quick tests (e.g. ``tau_ms=50``).
+    cf_range_hz : tuple of (min_hz, max_hz) or None
+        CF range spanned by the experiment, used by ``cf_to_tau_ms`` to map
+        each CF to a tau. If None, defaults to ``(CFs_Hz.min(), CFs_Hz.max())``.
+        Ignored if ``tau_ms`` is given.
+    tau_range_ms : tuple of (tau_min_ms, tau_max_ms)
+        Time-constant range passed to ``cf_to_tau_ms``. Default (10.0, 500.0):
+        the lowest CF gets 500ms, the highest CF gets 10ms.
+        Ignored if ``tau_ms`` is given.
 
     Returns
     -------
@@ -140,9 +177,13 @@ def apply_adaptrans(an_output: np.ndarray,
     """
     N_CFs, T = an_output.shape
 
-    # per-CF time constants and decay rates from Willmore et al.
-    #
-    tau_vals = np.array([willmore_tau(cf) for cf in CFs_Hz])      # (N_CFs,) ms
+    # per-CF time constants and decay rates
+    if tau_ms is not None:
+        tau_vals = np.full(N_CFs, float(tau_ms))
+    else:
+        if cf_range_hz is None:
+            cf_range_hz = (float(np.min(CFs_Hz)), float(np.max(CFs_Hz)))
+        tau_vals = np.array([cf_to_tau_ms(cf, cf_range_hz, tau_range_ms) for cf in CFs_Hz])
     print(f"Tau for this CF is: {tau_vals}")
     a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)
 
