@@ -384,7 +384,7 @@ def sample_from_master(
 
 TOTAL_DURATION_S  = 20.0
 _TARGET_DURS_MS   = (35, 45, 60, 75, 100, 150, 250, 500)
-ISI_MS_SINGLE     = 100
+ISI_MS_SINGLE     = 75
 TONE_ON_MS        = find_closest_durations(
     _TARGET_DURS_MS,
     isi_ms=ISI_MS_SINGLE,
