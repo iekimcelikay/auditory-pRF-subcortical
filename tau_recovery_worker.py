@@ -115,7 +115,7 @@ def _make_run_design(seed: int) -> list:
             design.append((TC_SILENCE_SEQ_ID, onset_s))
         else:
             design.append((rng.choice(active_ids), onset_s))
-        onset_s += SEQ_DUR_S + float(rng.randint(5, 16))
+        onset_s += SEQ_DUR_S
     return design
 
 
