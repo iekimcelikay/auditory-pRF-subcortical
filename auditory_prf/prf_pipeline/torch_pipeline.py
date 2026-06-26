@@ -31,14 +31,14 @@ from __future__ import annotations
 import math
 import sys
 import os
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import willmore_tau
+from auditory_prf.prf_pipeline.adaptrans_onoff_filters import tau_to_a
 from auditory_prf.prf_pipeline.hrf_torch import (
     SUBCORTICAL_PARAMS,
     build_hrf_kernel_torch,
@@ -227,20 +227,21 @@ class PowerLawSharpening(nn.Module):
     def alpha(self) -> torch.Tensor:
         return torch.exp(self._log_alpha).clamp(self.ALPHA_MIN, self.ALPHA_MAX)
 
-    def forward(self, population_psth: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Parameters
         ----------
-        population_psth : Tensor, shape (n_cf, n_time)
+        x : Tensor, any shape
+            Firing rate values to sharpen (e.g. (n_tones,) mean rates).
 
         Returns
         -------
-        sharpened : Tensor, shape (n_cf, n_time)
+        sharpened : Tensor, same shape as input
             Mean-normalized: mean(sharpened) == mean(input).
         """
         alpha     = self.alpha
-        sharpened = population_psth ** alpha
-        in_mean   = population_psth.mean()
+        sharpened = x ** alpha
+        in_mean   = x.mean()
         out_mean  = sharpened.mean()
         if out_mean > 0:
             sharpened = sharpened * (in_mean / out_mean)
@@ -310,44 +311,44 @@ class AdapTransFilter(nn.Module):
     Kernels are pre-flipped during building so F.conv1d (cross-correlation) produces
     the correct causal convolution result.
 
-    Per-CF parameters (n_cf,): d_on, d_off initialised from willmore_tau for each CF;
-    p initialised uniformly from config.w. Only the 2 CFs nearest the selected CF
-    receive gradients — the rest stay at their Willmore initialisation.
+    Per-CF parameters (n_cf,): d_on, d_off initialised from a fixed init_tau_ms;
+    p initialised uniformly from w. tau is a free parameter — no CF-tau relationship
+    is assumed.
 
     Parameters
     ----------
     cf_hz_array : np.ndarray, shape (n_cf,)
-        CF array from the cochlear simulation.
+        CF array. Pass a single-element array for the 1-D boxcar use case.
     w : float
         Initial adaptation weight for all CFs. Default 0.8.
     K : int or None
-        Kernel length (samples). None = auto (3 × max Willmore tau + 1).
+        Kernel length (samples). None = auto (3 × init_tau_ms + 1).
+    init_tau_ms : float
+        Initial time constant (ms) for all CFs. Default 100.0.
     """
 
     def __init__(
-        self, cf_hz_array: np.ndarray, w: float = 0.8, K: Optional[int] = None
+        self, cf_hz_array: np.ndarray, w: float = 0.8, K: Optional[int] = None,
+        init_tau_ms: float = 100.0,
     ) -> None:
         super().__init__()
         cf_hz_array = np.asarray(cf_hz_array, dtype=np.float64)
         self.n_cf = len(cf_hz_array)
 
-        # Per-CF Willmore time constants → a values → d values
-        tau_vals = np.array([willmore_tau(cf) for cf in cf_hz_array])   # (n_cf,) ms
-        a_vals   = np.exp(-1.0 / tau_vals)                               # dt_ms = 1
-        # d = sqrt(1/a - 1): maps a ∈ (0,1) → d ∈ (0,∞), unconstrained for optimizer
-        d_vals   = np.sqrt(1.0 / a_vals - 1.0).astype(np.float32)
+        # Uniform init tau → a → d for all CFs (no CF-tau relationship)
+        a_init = float(tau_to_a(init_tau_ms, dt_ms=1.0))
+        d_init = float(math.sqrt(1.0 / a_init - 1.0))
 
         # p = sqrt(1/w - 1): maps w ∈ (0,1) → p ∈ (0,∞)
         w_clip = float(np.clip(w, 1e-4, 1.0 - 1e-4))
         p_init = float(math.sqrt(1.0 / w_clip - 1.0))
 
-        self.d_on  = nn.Parameter(torch.from_numpy(d_vals.copy()))
-        self.d_off = nn.Parameter(torch.from_numpy(d_vals.copy()))
+        self.d_on  = nn.Parameter(torch.full((self.n_cf,), d_init))
+        self.d_off = nn.Parameter(torch.full((self.n_cf,), d_init))
         self.p     = nn.Parameter(torch.full((self.n_cf,), p_init))
 
-        # Auto-set K from maximum Willmore tau across all CFs
         if K is None:
-            K = int(round(3.0 * float(np.max(tau_vals)))) + 1
+            K = int(round(3.0 * init_tau_ms)) + 1
         self.K = K
 
     def _build_on_kernels(self, d: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
@@ -500,7 +501,7 @@ class NoiseModel(nn.Module):
         _root = os.path.join(os.path.dirname(__file__), '..', '..', 'prf_models')
         if _root not in sys.path:
             sys.path.insert(0, os.path.abspath(_root))
-        from pm_noise import PmAdapter  # noqa: PLC0415
+        from pm_noise import PmAdapter, REFERENCE_BOLD_STD  # noqa: PLC0415
 
         n_tr = bold.shape[0]
         self._pm_noise.pm = PmAdapter(
@@ -512,7 +513,10 @@ class NoiseModel(nn.Module):
         noise = torch.from_numpy(
             self._pm_noise.values_array.astype(np.float32)
         ).to(bold.device)
-        return bold + noise
+        # SNR-based scaling, matching apply_bold_noise(); detached so the
+        # noise magnitude doesn't add a second gradient path through bold.
+        signal_scale = bold.detach().std() / REFERENCE_BOLD_STD
+        return bold + noise * signal_scale
 
 
 # ── Full pipeline ──────────────────────────────────────────────────────────────
@@ -521,16 +525,20 @@ class AuditoryPRFPipeline(nn.Module):
     """Full auditory pRF forward model pipeline (deepSTRF-style AdapTrans).
 
     Pipeline order:
-      PowerLawSharpening → AdapTransFilter (all CFs) → CFSelector (ON+OFF) →
-      [dual path] DurationFilter → BoxcarBuilder → HRFConvolution →
+      CFSelector → [mean rates] → PowerLawSharpening → DurationFilter →
+      BoxcarBuilder → AdapTransFilter (1-D boxcar) → HRFConvolution →
       on_off_ratio mix → NoiseModel (optional)
 
-    AdapTrans is applied to the full population PSTH before CF selection,
-    matching the deepSTRF architecture. on_off_ratio is a standalone parameter
-    on this module (moved out of AdapTransFilter).
+    AdapTrans is applied to the flat mean-rate boxcar after CF selection,
+    matching the numpy pipeline semantics. on_off_ratio is a standalone
+    parameter on this module (moved out of AdapTransFilter).
+    AdapTransFilter is initialised for the single starting CF (not the full
+    population); d_on, d_off, p are shape (1,) and jointly optimised with CF.
 
     Model variants:
-      variant 1 — alpha + CF only
+      variant 0 — alpha + CF only; no AdapTrans, no duration filter
+                  (matches full_pipeline_notemporal.py exactly)
+      variant 1 — alpha + CF only (AdapTrans + duration applied but frozen)
       variant 2 — alpha + CF + duration (pref_dur_ms, sigma_dur_ms)
       variant 3 — alpha + CF + adaptrans (d_on, d_off, p) + on_off_ratio
       variant 4 — all stages free (default)
@@ -544,9 +552,10 @@ class AuditoryPRFPipeline(nn.Module):
 
     def __init__(self, config: PipelineConfig, model_variant: int = 4) -> None:
         super().__init__()
-        self.config      = config
+        self.config        = config
+        self.model_variant = model_variant
         self.sharpening  = PowerLawSharpening(config.alpha)
-        self.adaptrans   = AdapTransFilter(config.cf_hz_array, config.w, config.K)
+        self.adaptrans   = AdapTransFilter(np.array([config.cf_hz]), config.w, config.K)
         self.cf_selector = CFSelector(config.cf_hz_array, config.cf_hz)
         self.duration    = DurationFilter(config.pref_dur_ms, config.sigma_dur_ms)
         self.hrf         = HRFConvolution(config.hrf_params, config.tr_s)
@@ -566,6 +575,11 @@ class AuditoryPRFPipeline(nn.Module):
         self.duration.requires_grad_(variant in (2, 4))
         self.adaptrans.requires_grad_(variant in (3, 4))
         self._logit_on_off_ratio.requires_grad_(variant in (3, 4))
+        # variant 0: AdapTrans and duration are both skipped in forward(), not just frozen
+        if variant == 0:
+            self.adaptrans.requires_grad_(False)
+            self.duration.requires_grad_(False)
+            self._logit_on_off_ratio.requires_grad_(False)
 
     def forward(
         self,
@@ -586,31 +600,37 @@ class AuditoryPRFPipeline(nn.Module):
         bold : Tensor, shape (n_tr,)
             Predicted BOLD signal at TR resolution.
         """
-        # Stage 1: sharpening across all CFs
-        sharpened = self.sharpening(population_psth)          # (n_cf, T)
+        # Stage 1: CF selection on raw PSTH (gradient path to cf_x)
+        cf_tc = self.cf_selector(population_psth)             # (T,)
 
-        # Stage 2: AdapTrans applied to full population (deepSTRF style)
-        adapted = self.adaptrans(sharpened)                   # (2, n_cf, T)
+        # Stage 2: per-tone mean rates (recomputed inside graph for alpha grad)
+        mean_rates = recompute_mean_rates(cf_tc, chunk)       # (n_tones,)
 
-        # Stage 3: CF selection — returns both ON and OFF at preferred CF
-        on_off_tc = self.cf_selector(adapted)                 # (2, T)
-        on_tc, off_tc = on_off_tc[0], on_off_tc[1]           # each (T,)
+        # Stage 3: power-law sharpening on mean rates
+        sharpened = self.sharpening(mean_rates)               # (n_tones,)
 
-        # Stage 4: dual-path pRF model (same duration filter for ON and OFF)
-        mean_on  = recompute_mean_rates(on_tc,  chunk)        # (n_tones,)
-        mean_off = recompute_mean_rates(off_tc, chunk)        # (n_tones,)
-        prf_on   = self.duration(mean_on,  chunk.tone_dur_ms)
-        prf_off  = self.duration(mean_off, chunk.tone_dur_ms)
+        if self.model_variant == 0:
+            # Notemporal path: no AdapTrans, no duration filter.
+            # Matches full_pipeline_notemporal.py exactly.
+            train = build_boxcar_torch(sharpened, chunk)      # (T_total,)
+            bold  = self.hrf(train)                           # (n_tr,)
+        else:
+            # Stage 4: duration filter
+            prf = self.duration(sharpened, chunk.tone_dur_ms) # (n_tones,)
 
-        # Stage 5: boxcar + HRF for each channel
-        train_on  = build_boxcar_torch(prf_on,  chunk)        # (T_total,)
-        train_off = build_boxcar_torch(prf_off, chunk)        # (T_total,)
-        bold_on   = self.hrf(train_on)                        # (n_tr,)
-        bold_off  = self.hrf(train_off)                       # (n_tr,)
+            # Stage 5: flat boxcar from pRF-weighted mean rates
+            train = build_boxcar_torch(prf, chunk)            # (T_total,)
 
-        # Stage 6: mix ON and OFF BOLD (on_off_ratio learnable in variants 3+4)
-        ratio = self.on_off_ratio
-        bold  = ratio * bold_on + (1.0 - ratio) * bold_off
+            # Stage 6: AdapTrans ON/OFF on flat boxcar (single-CF filter)
+            on_off  = self.adaptrans(train.unsqueeze(0))      # (2, 1, T_total)
+            on_tc   = on_off[0, 0]                            # (T_total,)
+            off_tc  = on_off[1, 0]                            # (T_total,)
+
+            # Stage 7: HRF + ON/OFF mix
+            bold_on  = self.hrf(on_tc)                        # (n_tr,)
+            bold_off = self.hrf(off_tc)                       # (n_tr,)
+            ratio    = self.on_off_ratio
+            bold     = ratio * bold_on + (1.0 - ratio) * bold_off
 
         # Stage 7: noise (optional, not differentiable)
         if self.noise is not None:

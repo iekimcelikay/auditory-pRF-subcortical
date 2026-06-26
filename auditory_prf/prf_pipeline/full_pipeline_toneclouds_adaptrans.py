@@ -14,14 +14,12 @@ full_pipeline_toneclouds_notemporal.py, but:
       Phase 2 (per run):      assembled boxcar + AdapTrans ON/OFF,
                                BOLD ON/OFF/combined
 
-Skipped stages (same as notemporal):
-  - Duration Gaussian filter  (no pref_dur / sigma_dur)
-
 Retained stages:
   1. Load cochlea PSTH results
   2. Power-law sharpening (alpha)
   3. Chunk into tone-ON windows -> mean rate per tone
-  4. Build boxcar train (amplitude = mean rate)
+  3a. Duration Gaussian filter (optional: pref_dur / sigma_dur in ms)
+  4. Build boxcar train (amplitude = Gaussian-weighted mean rate, or raw mean rate)
   5. Assemble N runs from run design
   6. AdapTrans ON/OFF on the assembled run-level train
   7. HRF convolution -> BOLD
@@ -41,6 +39,7 @@ from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_population
 from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
+from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_scalar
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import (
     generate_run_design, assemble_run_bold, apply_run_noise, parse_noise_seed_arg,
@@ -60,28 +59,30 @@ def _save_fig(fig, plot_dir: Path, name: str):
     logger.debug("  Saved plot: %s", name)
 
 
-def _plot_powerlaw(time_axis, raw_cf, sharpened, cf_hz, alpha, seq_id, plot_dir):
-    """Phase 1 plot: raw vs power-law-sharpened CF timecourse."""
-    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-    axes[0].plot(time_axis * 1000, raw_cf, linewidth=0.6, color='steelblue')
-    axes[0].set_ylabel("Rate (spk/s)")
-    axes[0].set_title(f"Raw CF timecourse — CF {cf_hz:.0f} Hz | {seq_id}")
-    axes[1].plot(time_axis * 1000, sharpened, linewidth=0.6, color='darkorange')
-    axes[1].set_ylabel("Rate (spk/s)")
-    axes[1].set_xlabel("Time (ms)")
+def _plot_sharpening(raw_rates, sharpened_rates, alpha, seq_id, plot_dir):
+    """Phase 1 plot: per-tone mean rates before and after power-law sharpening."""
+    n_tones = len(raw_rates)
+    tone_indices = np.arange(1, n_tones + 1)
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    axes[0].bar(tone_indices, raw_rates, color='steelblue', edgecolor='k', linewidth=0.5)
+    axes[0].set_ylabel("Mean rate (spk/s)")
+    axes[0].set_title(f"Raw mean rates per tone — {seq_id}")
+    axes[1].bar(tone_indices, sharpened_rates, color='darkorange', edgecolor='k', linewidth=0.5)
+    axes[1].set_ylabel("Mean rate (spk/s)")
+    axes[1].set_xlabel("Tone number")
     axes[1].set_title(f"After power-law sharpening (α={alpha})")
-    _save_fig(fig, plot_dir, f"01_powerlaw_{seq_id}.png")
+    _save_fig(fig, plot_dir, f"01_sharpening_{seq_id}.png")
 
 
 def _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir):
-    """Phase 1 plot: mean firing rate per tone-ON chunk."""
+    """Phase 1 plot: sharpened mean firing rate per tone-ON chunk."""
     n_tones = len(mean_rates_on)
     tone_indices = np.arange(1, n_tones + 1)
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.bar(tone_indices, mean_rates_on, color='teal', edgecolor='k', linewidth=0.5)
     ax.set_xlabel("Tone number")
     ax.set_ylabel("Mean rate (spk/s)")
-    ax.set_title(f"Tone-ON mean rates — {seq_id}")
+    ax.set_title(f"Tone-ON mean rates (sharpened) — {seq_id}")
     _save_fig(fig, plot_dir, f"02_chunk_mean_rates_{seq_id}.png")
 
 
@@ -136,13 +137,12 @@ def _strip_signal_arrays(result: dict) -> dict:
             if k not in ("full_train", "on_response", "off_response")}
 
 
-def _format_combo_suffix(tau_ms: Optional[float], w: float, rho: float) -> str:
+def _format_combo_suffix(tau_ms: float, w: float, rho: float) -> str:
     """Build a filename/title suffix identifying one AdapTrans param combo.
 
-    e.g. ``_tau050_w0p80_rho1p00``, or ``_tauauto_w0p80_rho1p00`` if
-    ``tau_ms is None`` (per-CF tau derived via ``cf_to_tau_ms``).
+    e.g. ``_tau050_w0p80_rho1p00``
     """
-    tau_str = "tauauto" if tau_ms is None else f"tau{tau_ms:03.0f}"
+    tau_str = f"tau{tau_ms:03.0f}"
     w_str   = f"w{w:.2f}".replace(".", "p")
     rho_str = f"rho{rho:.2f}".replace(".", "p")
     return f"_{tau_str}_{w_str}_{rho_str}"
@@ -153,7 +153,7 @@ _worker: dict = {}
 
 
 def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s, noise_models,
-                  apply_adaptrans_flag, w, K, rectify, rho, tau_ms, cf_range_hz, tau_range_ms,
+                  apply_adaptrans_flag, w, K, rectify, rho, tau_ms,
                   save_plots, plot_dir, combo_suffix):
     _worker["per_seq"]              = per_seq
     _worker["hrf_kernel"]           = hrf_kernel
@@ -167,9 +167,7 @@ def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s,
     _worker["K"]                    = K
     _worker["rectify"]              = rectify
     _worker["rho"]                  = rho
-    _worker["tau_ms"]                = tau_ms
-    _worker["cf_range_hz"]           = cf_range_hz
-    _worker["tau_range_ms"]          = tau_range_ms
+    _worker["tau_ms"]               = tau_ms
     _worker["save_plots"]           = save_plots
     _worker["plot_dir"]             = plot_dir
     _worker["combo_suffix"]         = combo_suffix
@@ -191,8 +189,6 @@ def _assemble_one(task: tuple) -> tuple:
         rectify              = _worker["rectify"],
         rho                  = _worker["rho"],
         tau_ms               = _worker["tau_ms"],
-        cf_range_hz          = _worker["cf_range_hz"],
-        tau_range_ms         = _worker["tau_range_ms"],
     )
     bold_noisy_by_level = {
         level: apply_run_noise(result["bold_combined"], noise_model, run_idx, _worker["tr_s"])
@@ -255,14 +251,16 @@ DEFAULT_BASE_DIR  = Path(f"./models_output/{EXP_NAME}")
 # Float durations from find_closest_durations() in find_optimal_durations.py.
 # Must be floats (not rounded ints) so that numtones computation matches
 # calculate_num_tones() used during WAV generation.
-TONE_ON_MS       = (35.14, 44.93, 60.0, 75.44, 100.0, 150.0, 250.88, 488.24)
-ISI_MS           = (100,) * len(TONE_ON_MS)
+TONE_ON_MS       = (35.14, 44.93, 60.0, 75.44, 100.0, 150.0, 250.88, 488.24) # //TODO:FIXME: The durations are not correct for this pipeline
+# // FIXME: FIX THE DURATIONS FOR 75 ISI
+
+ISI_MS           = (75,) * len(TONE_ON_MS)
 NULL_FRACTION    = 0.25
 TRIAL_DURATION_S  = 20.0
 OPENING_BLANK_S   = 10.0
 CLOSING_BLANK_S   = 10.0
 ITI_RANGE_S       = 0
-N_RUNS            = 4
+N_RUNS            = 24
 BASE_SEED         = 42
 
 # ── AdapTrans / BOLD defaults ──────────────────────────────────────────────────
@@ -270,14 +268,15 @@ ADAPTRANS_W       = 0.8
 ADAPTRANS_K       = None    # auto-set (3x longest CF time constant)
 ADAPTRANS_RECTIFY = True
 BOLD_RHO          = 1.0
-ADAPTRANS_TAU_MS       = None           # None -> derive from cf_hz via cf_to_tau_ms
-ADAPTRANS_TAU_RANGE_MS = (10.0, 500.0)  # lowest CF -> 500ms, highest CF -> 10ms
+ADAPTRANS_TAU_MS  = 100.0   # free parameter, no CF-tau relationship
 
 
 def run_pipeline(
         exp_name: str = EXP_NAME,
         results_dir: Optional[Path] = None,
         alpha: float = 2.0,
+        pref_dur: Optional[float] = 75,   # ms; None = skip duration Gaussian
+        sigma_dur: float = 50.0,             # ms
         cf=10,
         output_dir: Optional[Path] = None,
         # tone-cloud filterbank
@@ -305,9 +304,7 @@ def run_pipeline(
         K: Optional[int] = ADAPTRANS_K,
         rectify: bool = ADAPTRANS_RECTIFY,
         rho: float = BOLD_RHO,
-        tau_ms: Optional[float] = ADAPTRANS_TAU_MS,
-        cf_range_hz: Optional[tuple] = None,
-        tau_range_ms: tuple = ADAPTRANS_TAU_RANGE_MS,
+        tau_ms: float = ADAPTRANS_TAU_MS,
         param_grid: Optional[list[dict]] = None,
         # plotting
         save_plots: bool = True,
@@ -352,11 +349,6 @@ def run_pipeline(
         )
     logger.info("Found %d NPZ file(s)", len(npz_files))
 
-    if cf_range_hz is None:
-        cf_list = np.asarray(ResultSaver(npz_files[0].parent).load_npz(npz_files[0].name)["cf_list"])
-        cf_range_hz = (float(cf_list.min()), float(cf_list.max()))
-    logger.info("AdapTrans tau    : cf_range_hz=(%.1f, %.1f) Hz, tau_range_ms=%s",
-                 cf_range_hz[0], cf_range_hz[1], tau_range_ms)
     logger.info("Param grid       : %d combo(s) — %s", len(param_grid), param_grid)
     logger.info("Noise levels     : %s", list(noise_models.keys()) or "none")
 
@@ -391,28 +383,39 @@ def run_pipeline(
         )
         dt_s         = time_axis[1] - time_axis[0]
         total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
-
-        sharpened = apply_powerlaw_population(population_psth, alpha)[cf_index, :]
-
-        if save_plots:
-            _plot_powerlaw(time_axis, population_psth[cf_index, :], sharpened,
-                           cf_hz, alpha, seq_id, plot_dir)
+        # . CHUNK INTO TONE-ON WINDOWS → MEAN RATES → POWER LAW SHARPENING
+        cf_tc_raw = population_psth[cf_index, :]
 
         if seq_id == TC_SILENCE_SEQ_ID:
-            spont_rate = float(np.mean(sharpened))
+            spont_rate = float(np.mean(cf_tc_raw))
             n_samples  = int(round(total_dur_ms))
             train      = np.full(n_samples, spont_rate)
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, _, _ = chunk_from_id(sharpened, time_axis, seq_id)
-            mean_rates_on = [np.mean(c) for c in result["chunks"]]
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
+            raw_mean_rates = np.array([np.mean(c) for c in result["chunks"]])
+            mean_rates_on  = apply_powerlaw_population(raw_mean_rates, alpha)
 
             if save_plots:
+                _plot_sharpening(raw_mean_rates, mean_rates_on, alpha, seq_id, plot_dir)
                 _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir)
-
+        # . (OPTIONAL) Gaussian duration filter
+            if pref_dur is not None:
+                amplitudes = [
+                    apply_duration_gaussian_scalar(m, tone_dur_ms, pref_dur, sigma_dur)
+                    for m in mean_rates_on
+                ]
+                logger.debug("  Duration Gaussian (pref_dur=%.0f ms, sigma=%.0f ms, tone_dur=%.0f ms) "
+                             "| weight=%.4f | mean_amp: %.2f -> %.4f",
+                             pref_dur, sigma_dur, tone_dur_ms,
+                             amplitudes[0] / mean_rates_on[0] if mean_rates_on[0] else 0,
+                             float(np.mean(mean_rates_on)), float(np.mean(amplitudes)))
+            else:
+                amplitudes = mean_rates_on
+        # . Build boxcar train
             train = build_prf_boxcar_train(
-                mean_rates_on,
+                amplitudes,
                 result["onsets_ms"],
                 result["offsets_ms"],
                 total_dur_ms,
@@ -475,7 +478,7 @@ def run_pipeline(
                 initargs=(per_seq, hrf_kernel, total_run_dur_s,
                           cf_hz_used, tr_s, signal_dt_s, noise_models,
                           apply_adaptrans_flag, combo_w, K, rectify, combo_rho,
-                          combo_tau_ms, cf_range_hz, tau_range_ms,
+                          combo_tau_ms,
                           save_plots, plot_dir, combo_suffix),
             ) as pool:
                 results = pool.map(_assemble_one, tasks)
@@ -496,8 +499,6 @@ def run_pipeline(
                     rectify=rectify,
                     rho=combo_rho,
                     tau_ms=combo_tau_ms,
-                    cf_range_hz=cf_range_hz,
-                    tau_range_ms=tau_range_ms,
                 )
                 bold_noisy_by_level = {
                     level: apply_run_noise(result["bold_combined"], noise_model, run_idx, tr_s)
@@ -526,6 +527,8 @@ def run_pipeline(
             "exp_name":             exp_name,
             "cf":                   cf,
             "alpha":                alpha,
+            "pref_dur":             str(pref_dur),
+            "sigma_dur":            sigma_dur,
             "tr_s":                 tr_s,
             "w":                    combo_w,
             "K":                    str(K),
@@ -544,9 +547,10 @@ def run_pipeline(
                 f"{k}_noisy_{level}": v["bold_noisy_by_level"][level] for k, v in all_runs.items()
             })
             save_dict[f"noise_seed_{level}"] = str(noise_model.seed)
+        pref_str = f"_pdur{int(round(pref_dur))}" if pref_dur is not None else ""
         saver.save_npz(
             save_dict,
-            f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}{combo_suffix}_bold.npz",
+            f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}{pref_str}{combo_suffix}_bold.npz",
         )
         logger.info("Saved BOLD to %s", _output_dir)
 
@@ -563,7 +567,12 @@ if __name__ == "__main__":
     parser.add_argument("--results-dir", type=str, default=None,
                         help="Path to cochlea NPZ results directory.")
     parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--alpha", type=float, default=2.0)
+    parser.add_argument("--alpha", type=float, default=4.0)
+    parser.add_argument("--pref_dur", type=float, default=None,
+                        help="Preferred duration for Gaussian duration filter (ms). "
+                             "None (default) = skip duration Gaussian.")
+    parser.add_argument("--sigma_dur", type=float, default=50.0,
+                        help="Duration tuning width for Gaussian filter (ms). Default: 50.")
     parser.add_argument("--w", type=float, default=ADAPTRANS_W,
                         help="AdapTrans adaptation weight.")
     parser.add_argument("--rho", type=float, default=BOLD_RHO,
@@ -576,20 +585,12 @@ if __name__ == "__main__":
     parser.add_argument("--no-adaptrans", action="store_true",
                         help="Disable AdapTrans (use the assembled boxcar train directly).")
     parser.add_argument("--tau_ms", type=float, default=ADAPTRANS_TAU_MS,
-                        help="Fixed AdapTrans time constant (ms) for every CF, "
-                             "bypassing cf_to_tau_ms. E.g. 50 for quick tests. "
-                             "Default: derive per-CF from cf_to_tau_ms.")
-    parser.add_argument("--tau_range_ms", type=float, nargs=2,
-                        default=ADAPTRANS_TAU_RANGE_MS, metavar=("TAU_MIN_MS", "TAU_MAX_MS"),
-                        help="Time-constant range (ms) for cf_to_tau_ms: lowest CF -> "
-                             f"TAU_MAX_MS, highest CF -> TAU_MIN_MS. Default: {ADAPTRANS_TAU_RANGE_MS}. "
-                             "Ignored if --tau_ms is given.")
-    parser.add_argument("--tau_ms_sweep", type=str, nargs="+", default=None,
+                        help=f"AdapTrans time constant (ms). Free parameter, no CF relationship. "
+                             f"Default: {ADAPTRANS_TAU_MS}.")
+    parser.add_argument("--tau_ms_sweep", type=float, nargs="+", default=None,
                         help="Sweep multiple AdapTrans tau_ms values (overrides --tau_ms). "
-                             "Each value is a float (ms), or 'auto'/'none' for the per-CF "
-                             "cf_to_tau_ms mapping. E.g. --tau_ms_sweep 50 100 auto. "
-                             "Phase 1 runs once; Phase 2 + a separate npz are produced "
-                             "per (tau_ms, w, rho) combo.")
+                             "E.g. --tau_ms_sweep 50 100 200. Phase 1 runs once; Phase 2 + "
+                             "a separate npz are produced per (tau_ms, w, rho) combo.")
     parser.add_argument("--w_sweep", type=float, nargs="+", default=None,
                         help="Sweep multiple AdapTrans w values (overrides --w).")
     parser.add_argument("--rho_sweep", type=float, nargs="+", default=None,
@@ -618,13 +619,9 @@ if __name__ == "__main__":
     # no-sweep case still produces a one-combo grid (with a filename suffix).
     import itertools
 
-    def _parse_tau_sweep_value(value: str) -> Optional[float]:
-        return None if value.lower() in ("auto", "none") else float(value)
-
-    _tau_ms_values = ([_parse_tau_sweep_value(v) for v in args.tau_ms_sweep]
-                       if args.tau_ms_sweep else [args.tau_ms])
-    _w_values   = args.w_sweep   if args.w_sweep   else [args.w]
-    _rho_values = args.rho_sweep if args.rho_sweep else [args.rho]
+    _tau_ms_values = args.tau_ms_sweep if args.tau_ms_sweep else [args.tau_ms]
+    _w_values      = args.w_sweep      if args.w_sweep      else [args.w]
+    _rho_values    = args.rho_sweep    if args.rho_sweep    else [args.rho]
     _param_grid = [
         {"tau_ms": t, "w": w, "rho": r}
         for t, w, r in itertools.product(_tau_ms_values, _w_values, _rho_values)
@@ -635,9 +632,10 @@ if __name__ == "__main__":
         results_dir=Path(args.results_dir) if args.results_dir else None,
         output_dir=Path(args.output_dir)   if args.output_dir   else None,
         alpha=args.alpha,
+        pref_dur=args.pref_dur,
+        sigma_dur=args.sigma_dur,
         rectify=args.rectify,
         apply_adaptrans_flag=not args.no_adaptrans,
-        tau_range_ms=tuple(args.tau_range_ms),
         param_grid=_param_grid,
         save_plots=not args.no_plots,
         noise_models=_noise_models,

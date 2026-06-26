@@ -47,7 +47,7 @@ from typing import Callable, Optional, Union
 
 import numpy as np
 
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import apply_adaptrans
+from auditory_prf.prf_pipeline.adaptrans_onoff_filters import apply_adaptrans, apply_sustained_channel
 from auditory_prf.prf_pipeline.hrf import convolve_hrf
 from auditory_prf.utils.condition_map import make_condition_map, SILENCE_SEQ_ID
 from prf_models.pm_noise import PmNoise, apply_bold_noise
@@ -107,9 +107,9 @@ def assemble_run_bold(
     apply_adaptrans_flag: bool = True,
     rectify: bool = False,
     rho: float = 1.0,
-    tau_ms: Optional[float] = None,
-    cf_range_hz: Optional[tuple] = None,
-    tau_range_ms: tuple = (10.0, 500.0),
+    tau_ms: float = 100.0,
+    tau_sus_ms: Optional[float] = None,
+    beta_sus: float = 0.0,
 ) -> dict:
     """Assemble a full-run BOLD timeseries from per-stimulus boxcar trains.
 
@@ -149,16 +149,17 @@ def assemble_run_bold(
         ON-to-OFF BOLD weighting ratio.  ``bold_combined = rho * bold_on + bold_off``.
         rho > 1: onset-dominated.  rho = 1: equal weights (default).  rho < 1:
         offset-dominated.  Free parameter during model fitting.
-    tau_ms : float or None
-        Fixed AdapTrans time constant (ms), passed straight to
-        ``apply_adaptrans``. If None, tau is derived from ``cf_hz`` via
-        ``cf_to_tau_ms`` using ``cf_range_hz``/``tau_range_ms``.
-    cf_range_hz : tuple of (min_hz, max_hz) or None
-        Experiment-wide CF range used by ``cf_to_tau_ms`` to map ``cf_hz`` to
-        a tau. Required (non-None) unless ``tau_ms`` is given — a single
-        ``cf_hz`` cannot define a range on its own.
-    tau_range_ms : tuple of (tau_min_ms, tau_max_ms)
-        Time-constant range passed to ``cf_to_tau_ms``. Default (10.0, 500.0).
+    tau_ms : float
+        AdapTrans time constant (ms). Free parameter — no CF-tau relationship
+        assumed. Default 100.0.
+    tau_sus_ms : float or None
+        Time constant (ms) of the non-normalised sustained exponential channel
+        ``y[n] = a·y[n-1] + x[n]``.  If None (default), no sustained channel
+        is added and behaviour is identical to the pre-existing pipeline.
+    beta_sus : float
+        Amplitude weight for the sustained channel relative to AdapTrans.
+        ``bold_combined = (rho·bold_on + bold_off) + beta_sus·bold_sus``.
+        Only used when ``tau_sus_ms`` is not None.  Default 0.0 (no effect).
 
     Returns
     -------
@@ -168,7 +169,8 @@ def assemble_run_bold(
         off_response  : np.ndarray, shape (n_1ms,) — AdapTrans OFF channel (or zeros)
         bold_on       : np.ndarray, shape (n_TR,)
         bold_off      : np.ndarray, shape (n_TR,)
-        bold_combined : np.ndarray, shape (n_TR,)  — rho * bold_on + bold_off
+        bold_sus      : np.ndarray, shape (n_TR,) or None
+        bold_combined : np.ndarray, shape (n_TR,)  — (rho·bold_on + bold_off) + beta_sus·bold_sus
         t_tr          : np.ndarray, shape (n_TR,)  — time axis in seconds
     """
     n_samples = int(round(total_run_dur_s / signal_dt_s))
@@ -211,8 +213,6 @@ def assemble_run_bold(
             pad_value=0.0,
             rectify=rectify,
             tau_ms=tau_ms,
-            cf_range_hz=cf_range_hz,
-            tau_range_ms=tau_range_ms,
         )
         on_response  = on_off[0, 0, :]
         off_response = on_off[1, 0, :]
@@ -225,6 +225,16 @@ def assemble_run_bold(
     bold_off = convolve_hrf(off_response, hrf_kernel, signal_dt=signal_dt_s,
                             kernel_dt=signal_dt_s, output_dt=tr_s)
 
+    bold_sus = None
+    if tau_sus_ms is not None:
+        sus_response = apply_sustained_channel(full_train, tau_sus_ms,
+                                               signal_dt_s * 1000.0)
+        bold_sus = convolve_hrf(sus_response, hrf_kernel, signal_dt=signal_dt_s,
+                                kernel_dt=signal_dt_s, output_dt=tr_s)
+
+    bold_transient = rho * bold_on + bold_off
+    bold_combined  = bold_transient + (beta_sus * bold_sus if bold_sus is not None else 0.0)
+
     n_trs = len(bold_on)
     return {
         "full_train":    full_train,
@@ -232,7 +242,8 @@ def assemble_run_bold(
         "off_response":  off_response,
         "bold_on":       bold_on,
         "bold_off":      bold_off,
-        "bold_combined": rho * bold_on + bold_off,
+        "bold_sus":      bold_sus,
+        "bold_combined": bold_combined,
         "t_tr":          np.arange(n_trs) * tr_s,
     }
 

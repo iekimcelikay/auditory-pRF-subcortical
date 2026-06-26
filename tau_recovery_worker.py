@@ -161,7 +161,7 @@ def forward_run(tau_ms: float, run_design: list) -> np.ndarray:
         total_run_dur_s=TOTAL_RUN_DUR_S, hrf_kernel=hrf_kernel,
         cf_hz=cf_hz_used, tr_s=TR_S, signal_dt_s=SIGNAL_DT_S,
         w=w_val, K=None, apply_adaptrans_flag=True,
-        rectify=RECTIFY, rho=RHO, tau_ms=tau_ms, cf_range_hz=None,
+        rectify=RECTIFY, rho=RHO, tau_ms=tau_ms,
     )["bold_combined"]
 
 

@@ -33,9 +33,12 @@ from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_populatio
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
-from auditory_prf.prf_pipeline.run_assembly import generate_run_design, assemble_run_bold
+from auditory_prf.prf_pipeline.run_assembly import (
+    generate_run_design, assemble_run_bold, apply_run_noise, parse_noise_seed_arg,
+)
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
+from prf_models.pm_noise import PmNoise
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +46,14 @@ logger = logging.getLogger(__name__)
 _worker: dict = {}
 
 
-def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s):
+def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s, noise_model):
     _worker["per_seq"]         = per_seq
     _worker["hrf_kernel"]      = hrf_kernel
     _worker["total_run_dur_s"] = total_run_dur_s
     _worker["cf_hz"]           = cf_hz
     _worker["tr_s"]            = tr_s
     _worker["signal_dt_s"]     = signal_dt_s
+    _worker["noise_model"]     = noise_model
 
 
 def _assemble_one(task: tuple) -> tuple:
@@ -64,7 +68,10 @@ def _assemble_one(task: tuple) -> tuple:
         signal_dt_s      = _worker["signal_dt_s"],
         apply_adaptrans_flag=False,
     )
-    return run_idx, run_design, result["bold_combined"], result["bold_on"], result["t_tr"]
+    bold_noisy = apply_run_noise(
+        result["bold_combined"], _worker["noise_model"], run_idx, _worker["tr_s"]
+    )
+    return run_idx, run_design, result["bold_combined"], bold_noisy, result["bold_on"], result["t_tr"]
 
 
 # ── tone-cloud seq_id scheme ───────────────────────────────────────────────────
@@ -156,6 +163,8 @@ def run_pipeline(
         tr_s: float = 1.6,
         # parallelism
         n_workers: int = 1,
+        # noise
+        noise_model: Optional[PmNoise] = None,
 ):
     _output_dir = output_dir or Path(f"./output/{exp_name}_toneclouds_notemporal")
     LoggingConfigurator(
@@ -211,17 +220,19 @@ def run_pipeline(
         dt_s         = time_axis[1] - time_axis[0]
         total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
 
-        sharpened = apply_powerlaw_population(population_psth, alpha)[cf_index, :]
+        cf_tc_raw = population_psth[cf_index, :]
 
         if seq_id == TC_SILENCE_SEQ_ID:
-            spont_rate = float(np.mean(sharpened))
+            spont_rate = float(np.mean(cf_tc_raw))
             n_samples  = int(round(total_dur_ms))
             train      = np.full(n_samples, spont_rate)
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, _, _ = chunk_from_id(sharpened, time_axis, seq_id)
-            mean_rates_on = [np.mean(c) for c in result["chunks"]]
+            result, _, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
+            mean_rates_on = apply_powerlaw_population(
+                np.array([np.mean(c) for c in result["chunks"]]), alpha
+            )
 
             train = build_prf_boxcar_train(
                 mean_rates_on,
@@ -279,7 +290,7 @@ def run_pipeline(
             processes=n_workers,
             initializer=_worker_init,
             initargs=(per_seq, hrf_kernel, total_run_dur_s,
-                      cf_hz_used, tr_s, signal_dt_s),
+                      cf_hz_used, tr_s, signal_dt_s, noise_model),
         ) as pool:
             results = pool.map(_assemble_one, tasks)
     else:
@@ -295,13 +306,16 @@ def run_pipeline(
                 signal_dt_s=signal_dt_s,
                 apply_adaptrans_flag=False,
             )
-            results.append((run_idx, run_design, result["bold_combined"], result["bold_on"], result["t_tr"]))
+            bold_noisy = apply_run_noise(result["bold_combined"], noise_model, run_idx, tr_s)
+            results.append((run_idx, run_design, result["bold_combined"], bold_noisy,
+                             result["bold_on"], result["t_tr"]))
 
     bold_combined = None
-    for run_idx, run_design, bold_combined, bold_on, t_tr in results:
+    for run_idx, run_design, bold_combined, bold_noisy, bold_on, t_tr in results:
         all_runs[f"run_{run_idx + 1:02d}"] = {
             "run_design":    run_design,
             "bold_combined": bold_combined,
+            "bold_noisy":    bold_noisy,
             "bold_on":       bold_on,
             "t_tr":          t_tr,
             "seed":          base_seed + run_idx if run_designs is None else None,
@@ -311,14 +325,18 @@ def run_pipeline(
 
     # ── Save ──────────────────────────────────────────────────────────────────
     saver = ResultSaver(_output_dir)
+    save_dict = {
+        "exp_name": exp_name,
+        "cf":       cf,
+        "alpha":    alpha,
+        "tr_s":     tr_s,
+        **{k: v["bold_combined"] for k, v in all_runs.items()},
+    }
+    if noise_model is not None:
+        save_dict.update({f"{k}_noisy": v["bold_noisy"] for k, v in all_runs.items()})
+        save_dict["noise_seed"] = str(noise_model.seed)
     saver.save_npz(
-        {
-            "exp_name": exp_name,
-            "cf":       cf,
-            "alpha":    alpha,
-            "tr_s":     tr_s,
-            **{k: v["bold_combined"] for k, v in all_runs.items()},
-        },
+        save_dict,
         f"{exp_name}_toneclouds_notemporal_cf{cf:03d}_bold.npz",
     )
     logger.info("Saved BOLD to %s", _output_dir)
@@ -335,11 +353,23 @@ if __name__ == "__main__":
                         help="Path to cochlea NPZ results directory.")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--alpha", type=float, default=2.0)
+    parser.add_argument("--noise_voxel", choices=["none", "low", "mid", "high"],
+                        default="none",
+                        help="BOLD noise preset (PmNoise voxel level). "
+                             "'none' = no noise (default).")
+    parser.add_argument("--noise_seed", type=str, default="random",
+                        help="PmNoise seed: an integer for reproducible noise, "
+                             "'random' (default), or 'none'/'nonoise'.")
     args = parser.parse_args()
+
+    _noise_model = None
+    if args.noise_voxel != "none":
+        _noise_model = PmNoise(voxel=args.noise_voxel, seed=parse_noise_seed_arg(args.noise_seed))
 
     run_pipeline(
         cf=args.cf,
         results_dir=Path(args.results_dir) if args.results_dir else None,
         output_dir=Path(args.output_dir)   if args.output_dir   else None,
         alpha=args.alpha,
+        noise_model=_noise_model,
     )

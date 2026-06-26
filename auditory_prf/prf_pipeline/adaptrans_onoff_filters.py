@@ -132,11 +132,11 @@ def apply_adaptrans(an_output: np.ndarray,
                     K: Optional[int] = None,
                     rectify: bool = False,
                     pad_value: Optional[float] = None,
-                    tau_ms: Optional[float] = None,
-                    cf_range_hz: Optional[tuple] = None,
-                    tau_range_ms: tuple = (10.0, 500.0)) -> np.ndarray:
+                    tau_ms: float = 100.0) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
+
+    tau_ms is a free parameter with no assumed relationship to CF.
 
     Parameters
     ----------
@@ -148,30 +148,17 @@ def apply_adaptrans(an_output: np.ndarray,
         Time step of the downsampled signal in milliseconds.
     w : float
         Adaptation weight, same for all CFs. Default 0.8.
-        Will become a learnable parameter during model fitting later.
     K : int or None
-        Kernel length in samples. If None, auto-set to cover
-        3x the longest time constant across all CFs.
+        Kernel length in samples. If None, auto-set to cover 3x tau_ms.
     rectify : bool
-        Half-wave rectify output (ReLU). Default False. #TODO: make it false.
-    # NOTE: however we actually need to rectify the output, why do i make the default false?
-
+        Half-wave rectify output (ReLU). Default False.
     pad_value : float or None
         Value used to pad the left edge of each channel before convolution.
-        If None (default), replicates signal[0] of each channel (standard
-        causal padding). Pass 0.0 for isolated per-tone signals that start
-        with non-zero amplitude at t=0 to avoid suppressing the first onset.
-    tau_ms : float or None
-        If given, use this fixed time constant (ms) for every CF, bypassing
-        ``cf_to_tau_ms``. Useful for quick tests (e.g. ``tau_ms=50``).
-    cf_range_hz : tuple of (min_hz, max_hz) or None
-        CF range spanned by the experiment, used by ``cf_to_tau_ms`` to map
-        each CF to a tau. If None, defaults to ``(CFs_Hz.min(), CFs_Hz.max())``.
-        Ignored if ``tau_ms`` is given.
-    tau_range_ms : tuple of (tau_min_ms, tau_max_ms)
-        Time-constant range passed to ``cf_to_tau_ms``. Default (10.0, 500.0):
-        the lowest CF gets 500ms, the highest CF gets 10ms.
-        Ignored if ``tau_ms`` is given.
+        If None, replicates signal[0] (standard causal padding). Pass 0.0
+        for boxcar trains that start with non-zero amplitude at t=0.
+    tau_ms : float
+        AdapTrans time constant (ms), applied uniformly to all CFs.
+        Default 100.0. Free parameter — no CF-tau relationship assumed.
 
     Returns
     -------
@@ -181,13 +168,7 @@ def apply_adaptrans(an_output: np.ndarray,
     """
     N_CFs, T = an_output.shape
 
-    # per-CF time constants and decay rates
-    if tau_ms is not None:
-        tau_vals = np.full(N_CFs, float(tau_ms))
-    else:
-        if cf_range_hz is None:
-            cf_range_hz = (float(np.min(CFs_Hz)), float(np.max(CFs_Hz)))
-        tau_vals = np.array([cf_to_tau_ms(cf, cf_range_hz, tau_range_ms) for cf in CFs_Hz])
+    tau_vals = np.full(N_CFs, float(tau_ms))
     logger.debug("Tau values (ms) for these CFs: %s", tau_vals)
     a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)
 
@@ -266,6 +247,43 @@ def preprocess_AN_output(an_output: np.ndarray,
     on_off      = apply_adaptrans(downsampled, CFs_Hz,
                                   dt_coarse_ms, w=w, K=K)      # (2, N_CFs, T_coarse)
     return on_off
+
+
+def apply_sustained_channel(
+    signal: np.ndarray,
+    tau_ms: float,
+    dt_ms: float,
+) -> np.ndarray:
+    """Non-normalized causal leaky integrator (sustained neural channel).
+
+    Implements y[n] = a·y[n-1] + x[n], a = exp(-dt/τ).
+
+    The plateau response to amplitude A is A/(1-a) ≈ A·τ_ms/dt_ms — deliberately
+    NOT normalised so the per-tone integral τ·(1-exp(-d/τ)) varies with τ.
+    This τ-dependence across tone-duration conditions is what makes τ recoverable
+    from BOLD amplitude differences (unlike AdapTrans whose kernel sums to 1-w
+    regardless of τ).
+
+    Parameters
+    ----------
+    signal : np.ndarray, shape (T,)
+        Input boxcar train at dt_ms resolution.
+    tau_ms : float
+        Time constant in milliseconds.
+    dt_ms : float
+        Time step in milliseconds.
+
+    Returns
+    -------
+    sustained : np.ndarray, shape (T,)
+    """
+    from scipy.signal import lfilter
+    a = np.exp(-dt_ms / tau_ms)
+    # Normalise by τ_samples so plateau = input amplitude (same scale as AdapTrans).
+    # Without this: plateau = A/(1-a) ≈ A·τ_ms/dt_ms — up to 250× larger than AdapTrans.
+    # After this: plateau → A, and per-tone integral = (1-exp(-d/τ)) — τ-sensitive but bounded.
+    tau_samples = tau_ms / dt_ms
+    return lfilter([1.0], [1.0, -a], signal) / tau_samples
 
 
 def build_prf_boxcar_train(

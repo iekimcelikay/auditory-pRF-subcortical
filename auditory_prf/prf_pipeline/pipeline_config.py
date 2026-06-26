@@ -72,9 +72,9 @@ class ChunkResult:
     Parameters
     ----------
     mean_rates : np.ndarray, shape (n_tones,)
-        Per-tone mean firing rate from the sharpened CF timecourse.
+        Per-tone mean firing rate from the raw (unsharpened) CF timecourse.
         Stored for numpy-pipeline parity checks; recomputed inside forward()
-        so gradients flow back to alpha.
+        so gradients flow back through CFSelector and alpha.
     onsets_ms : np.ndarray, shape (n_tones,)
         Bare tone onset times in ms (no chunk margin). Used for boxcar building
         and for recomputing mean rates inside forward().
