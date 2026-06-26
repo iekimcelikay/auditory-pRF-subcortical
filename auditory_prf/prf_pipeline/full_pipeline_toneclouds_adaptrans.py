@@ -251,8 +251,7 @@ DEFAULT_BASE_DIR  = Path(f"./models_output/{EXP_NAME}")
 # Float durations from find_closest_durations() in find_optimal_durations.py.
 # Must be floats (not rounded ints) so that numtones computation matches
 # calculate_num_tones() used during WAV generation.
-TONE_ON_MS       = (35.14, 44.93, 60.0, 75.44, 100.0, 150.0, 250.88, 488.24) # //TODO:FIXME: The durations are not correct for this pipeline
-# // FIXME: FIX THE DURATIONS FOR 75 ISI
+TONE_ON_MS       = (34.89, 44.76, 60.14, 75.38, 100.44, 149.72, 247.58, 496.43)
 
 ISI_MS           = (75,) * len(TONE_ON_MS)
 NULL_FRACTION    = 0.25
