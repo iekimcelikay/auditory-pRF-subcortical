@@ -32,7 +32,7 @@ module load Miniforge3
 
 # ---- Environment Setup -------------------------------------------------------
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
-RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/toneclouds_gaussianprf_20260612_0155
+RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/toneclouds_gaussianprf_20260619_0114
 
 # Run the Python script
 # One job per CF. tau_ms is a free parameter (no CF-tau relationship).
