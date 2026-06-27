@@ -29,7 +29,7 @@ TAU_GT_SWEEP  = [20, 75, 150, 250]
 TAU_GRID_MS   = [20, 30, 50, 75, 100, 150, 250]
 
 # ── Fixed parameters ───────────────────────────────────────────────────────────
-RESULTS_DIR       = Path("models_output/toneclouds_gaussianprf_20260612_0155")
+RESULTS_DIR       = Path("models_output/toneclouds_gaussianprf_20260619_0114")
 TC_SILENCE_SEQ_ID = "tonecloud00_dur0ms_isi0ms"
 SANITY_FREQ       = "fc572hz"
 CF_IDX            = 10
