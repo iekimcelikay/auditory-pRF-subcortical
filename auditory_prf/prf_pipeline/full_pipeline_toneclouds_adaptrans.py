@@ -535,8 +535,6 @@ def run_pipeline(
             "rho":                  combo_rho,
             "apply_adaptrans_flag": apply_adaptrans_flag,
             "tau_ms":               str(combo_tau_ms),
-            "cf_range_hz":          cf_range_hz,
-            "tau_range_ms":         tau_range_ms,
             **{k: v["bold_combined"] for k, v in all_runs.items()},
             **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
             **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},
@@ -546,10 +544,11 @@ def run_pipeline(
                 f"{k}_noisy_{level}": v["bold_noisy_by_level"][level] for k, v in all_runs.items()
             })
             save_dict[f"noise_seed_{level}"] = str(noise_model.seed)
-        pref_str = f"_pdur{int(round(pref_dur))}" if pref_dur is not None else ""
+        pref_str  = f"_pdur{int(round(pref_dur))}" if pref_dur is not None else ""
+        alpha_str = f"_alpha{int(round(alpha))}"
         saver.save_npz(
             save_dict,
-            f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}{pref_str}{combo_suffix}_bold.npz",
+            f"{exp_name}_toneclouds_adaptrans_cf{cf:03d}{pref_str}{alpha_str}{combo_suffix}_bold.npz",
         )
         logger.info("Saved BOLD to %s", _output_dir)
 
