@@ -6,14 +6,14 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
-#SBATCH --time=00:20:00
-#SBATCH --array=0-999
+#SBATCH --time=00:30:00
+#SBATCH --array=0-9
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/gt35_singlerun_%A_%a.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/gt35_singlerun_%A_%a.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=i.ekimcelikay@gmail.com
 
-echo "Task $SLURM_ARRAY_TASK_ID / 999 started at $(date) on $SLURM_NODELIST"
+echo "Task $SLURM_ARRAY_TASK_ID / 9 started at $(date) on $SLURM_NODELIST"
 
 module load Miniforge3
 
