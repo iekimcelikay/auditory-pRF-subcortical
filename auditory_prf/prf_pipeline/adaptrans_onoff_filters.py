@@ -209,8 +209,8 @@ def apply_adaptrans(an_output: np.ndarray,
         logger.debug("  raw_ON  onset:  %.4e  (should be ~= signal.max())", raw_ON[onset_idx])
         logger.debug("  raw_OFF offset: %.4e", raw_OFF[off_idx])
 
-        out_ON[i]  = np.convolve(padded, kernel_ON,  mode='valid')[:T]
-        out_OFF[i] = np.convolve(padded, kernel_OFF, mode='valid')[:T]
+        out_ON[i]  = raw_ON
+        out_OFF[i] = raw_OFF
 
     if rectify:
         out_ON  = np.maximum(out_ON,  0.0)
