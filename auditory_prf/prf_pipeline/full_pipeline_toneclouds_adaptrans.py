@@ -50,6 +50,10 @@ from prf_models.pm_noise import PmNoise
 
 logger = logging.getLogger(__name__)
 
+# TODOS - housekeeping
+# //[ ] AESTHETHICS: Move plotting functions to their own script in the future
+# TODOS - functional:
+
 
 # ── plotting helpers ──────────────────────────────────────────────────────────
 def _save_fig(fig, plot_dir: Path, name: str):
@@ -87,6 +91,7 @@ def _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir):
 
 
 def _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir, combo_suffix=""):
+    # // [ ]: Add optional Duration Gaussian
     """Phase 2 plot: assembled boxcar train + AdapTrans ON/OFF for one run."""
     n_1ms = len(result["full_train"])
     time_1ms = np.arange(n_1ms)
@@ -137,12 +142,17 @@ def _strip_signal_arrays(result: dict) -> dict:
             if k not in ("full_train", "on_response", "off_response")}
 
 
-def _format_combo_suffix(tau_ms: float, w: float, rho: float) -> str:
+def _format_combo_suffix(tau_ms: float, w: float, rho: float,
+                         tau_ms_off: Optional[float] = None) -> str:
     """Build a filename/title suffix identifying one AdapTrans param combo.
 
-    e.g. ``_tau050_w0p80_rho1p00``
+    When tau_ms_off is None (or equal to tau_ms): ``_tau050_w0p80_rho1p00``
+    When tau_ms_off differs:                       ``_tauon050_tauoff200_w0p80_rho1p00``
     """
-    tau_str = f"tau{tau_ms:03.0f}"
+    if tau_ms_off is not None and tau_ms_off != tau_ms:
+        tau_str = f"tauon{tau_ms:03.0f}_tauoff{tau_ms_off:03.0f}"
+    else:
+        tau_str = f"tau{tau_ms:03.0f}"
     w_str   = f"w{w:.2f}".replace(".", "p")
     rho_str = f"rho{rho:.2f}".replace(".", "p")
     return f"_{tau_str}_{w_str}_{rho_str}"
@@ -153,8 +163,8 @@ _worker: dict = {}
 
 
 def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s, noise_models,
-                  apply_adaptrans_flag, w, K, rectify, rho, tau_ms,
-                  save_plots, plot_dir, combo_suffix):
+                  apply_adaptrans_flag, w, K, rectify, rho, tau_ms, tau_ms_off,
+                  save_plots, plot_dir, combo_suffix, spont_rate):
     _worker["per_seq"]              = per_seq
     _worker["hrf_kernel"]           = hrf_kernel
     _worker["total_run_dur_s"]      = total_run_dur_s
@@ -168,9 +178,11 @@ def _worker_init(per_seq, hrf_kernel, total_run_dur_s, cf_hz, tr_s, signal_dt_s,
     _worker["rectify"]              = rectify
     _worker["rho"]                  = rho
     _worker["tau_ms"]               = tau_ms
+    _worker["tau_ms_off"]           = tau_ms_off
     _worker["save_plots"]           = save_plots
     _worker["plot_dir"]             = plot_dir
     _worker["combo_suffix"]         = combo_suffix
+    _worker["spont_rate"]           = spont_rate
 
 
 def _assemble_one(task: tuple) -> tuple:
@@ -189,6 +201,8 @@ def _assemble_one(task: tuple) -> tuple:
         rectify              = _worker["rectify"],
         rho                  = _worker["rho"],
         tau_ms               = _worker["tau_ms"],
+        tau_ms_off           = _worker["tau_ms_off"],
+        spont_rate           = _worker["spont_rate"],
     )
     bold_noisy_by_level = {
         level: apply_run_noise(result["bold_combined"], noise_model, run_idx, _worker["tr_s"])
@@ -207,7 +221,7 @@ STIMULUS_SAMPLE_RATE = 100_000         # sample rate used during WAV generation
 TC_SILENCE_SEQ_ID = "tonecloud00_dur0ms_isi0ms"
 
 
-def _make_tonecloud_seq_id_fn(
+def _make_tonecloud_seq_id_fn( # // RECHECK: Why don't we use the same sequence id generator in both scripts
     band_centers_hz: tuple,
     total_seq_dur_s: float,
     sample_rate: int,
@@ -236,7 +250,7 @@ def _make_tonecloud_seq_id_fn(
         return (
             f"tonecloud{g_idx + 1:02d}"
             f"_fc{int(round(center_hz))}hz"
-            f"_dur{int(round(dur_ms))}ms"
+            f"_dur{int(round(dur_ms))}ms"   # // RECHECK: IS this tone duration? change the variable name.
             f"_isi{int(round(isi_ms))}ms"
             f"_numtones{numtones}"
         )
@@ -256,8 +270,9 @@ TONE_ON_MS       = (34.89, 44.76, 60.14, 75.38, 100.44, 149.72, 247.58, 496.43)
 ISI_MS           = (75,) * len(TONE_ON_MS)
 NULL_FRACTION    = 0.25
 TRIAL_DURATION_S  = 20.0
-OPENING_BLANK_S   = 10.0
-CLOSING_BLANK_S   = 10.0
+TR_S              = 1.6
+OPENING_BLANK_S   = 4 * TR_S           # 4 TRs
+CLOSING_BLANK_S   = 4 * TR_S           # 4 TRs
 ITI_RANGE_S       = 0
 N_RUNS            = 24
 BASE_SEED         = 42
@@ -267,7 +282,8 @@ ADAPTRANS_W       = 0.8
 ADAPTRANS_K       = None    # auto-set (3x longest CF time constant)
 ADAPTRANS_RECTIFY = True
 BOLD_RHO          = 1.0
-ADAPTRANS_TAU_MS  = 100.0   # free parameter, no CF-tau relationship
+ADAPTRANS_TAU_MS      = 100.0   # ON-filter time constant; free parameter
+ADAPTRANS_TAU_MS_OFF  = None    # OFF-filter time constant; None = same as tau_ms
 
 
 def run_pipeline(
@@ -293,10 +309,10 @@ def run_pipeline(
         n_runs: int = N_RUNS,
         base_seed: int = BASE_SEED,
         run_designs: Optional[list] = None,
-        total_run_dur_s: float = 720.0,
+        total_run_dur_s: float = 652.8, # 8x3 conditions: opening_blank_s (6.4) + 32 trials x 20s (640) + closing_blank_s (6.4)
         # HRF
         hrf_params: Optional[dict] = None,
-        tr_s: float = 1.6,
+        tr_s: float = TR_S,
         # AdapTrans
         apply_adaptrans_flag: bool = True,
         w: float = ADAPTRANS_W,
@@ -304,6 +320,7 @@ def run_pipeline(
         rectify: bool = ADAPTRANS_RECTIFY,
         rho: float = BOLD_RHO,
         tau_ms: float = ADAPTRANS_TAU_MS,
+        tau_ms_off: Optional[float] = ADAPTRANS_TAU_MS_OFF,
         param_grid: Optional[list[dict]] = None,
         # plotting
         save_plots: bool = True,
@@ -317,7 +334,7 @@ def run_pipeline(
     # once regardless; Phase 2 (AdapTrans + HRF) and the saved npz run once per
     # combo, with (tau_ms, w, rho) encoded in the filename (_format_combo_suffix).
     if param_grid is None:
-        param_grid = [{"tau_ms": tau_ms, "w": w, "rho": rho}]
+        param_grid = [{"tau_ms": tau_ms, "tau_ms_off": tau_ms_off, "w": w, "rho": rho}]
     _output_dir = output_dir or Path(f"./output/{exp_name}_toneclouds_adaptrans")
     LoggingConfigurator(
         output_dir=_output_dir,
@@ -382,21 +399,24 @@ def run_pipeline(
         )
         dt_s         = time_axis[1] - time_axis[0]
         total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
-        # . CHUNK INTO TONE-ON WINDOWS → MEAN RATES → POWER LAW SHARPENING
-        cf_tc_raw = population_psth[cf_index, :]
+        # . POWER LAW SHARPENING (full population matrix) → CHUNK INTO TONE-ON WINDOWS → MEAN RATES
+        sharpened_pop   = apply_powerlaw_population(population_psth, alpha)
+        cf_tc_raw       = population_psth[cf_index, :]
+        cf_tc_sharpened = sharpened_pop[cf_index, :]
 
         if seq_id == TC_SILENCE_SEQ_ID:
-            spont_rate = float(np.mean(cf_tc_raw))
+            spont_rate = float(np.mean(cf_tc_sharpened))
             n_samples  = int(round(total_dur_ms))
             train      = np.full(n_samples, spont_rate)
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, tone_dur_ms, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
-            raw_mean_rates = np.array([np.mean(c) for c in result["chunks"]])
-            mean_rates_on  = apply_powerlaw_population(raw_mean_rates, alpha)
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id)
+            mean_rates_on = np.array([np.mean(c) for c in result["chunks"]])
 
             if save_plots:
+                raw_result, _, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
+                raw_mean_rates = np.array([np.mean(c) for c in raw_result["chunks"]])
                 _plot_sharpening(raw_mean_rates, mean_rates_on, alpha, seq_id, plot_dir)
                 _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir)
         # . (OPTIONAL) Gaussian duration filter
@@ -432,8 +452,8 @@ def run_pipeline(
     logger.info("Phase 1 complete — %d sequences processed.", len(per_seq))
 
     # ── Validate seq_id alignment ──────────────────────────────────────────────
-    expected_seq_ids = {seq_id_fn(ton, isi, g_idx)
-                        for ton, isi, g_idx in stimuli} | {TC_SILENCE_SEQ_ID}
+    expected_seq_ids = {seq_id_fn(tone_on, isi,  g_idx)
+                        for tone_on, isi, g_idx in stimuli} | {TC_SILENCE_SEQ_ID}
     missing = expected_seq_ids - set(per_seq.keys())
     if missing:
         sample = sorted(missing)[:3]
@@ -447,6 +467,7 @@ def run_pipeline(
 
     # ── Phase 2: per-run assembly ──────────────────────────────────────────────
     cf_hz_used = next(iter(per_seq.values()))["cf_hz"]
+    spont_rate_used = float(per_seq[TC_SILENCE_SEQ_ID]["train"][0])
 
     _designs = run_designs if run_designs is not None else [
         generate_run_design(
@@ -458,13 +479,33 @@ def run_pipeline(
         )
         for i in range(n_runs)
     ]
+
+    # Assumes zero ITI jitter (iti_range_s == 0): with jitter, last_onset_s
+    # varies per run draw and can't be checked against a single fixed value.
+    for run_idx, design in enumerate(_designs):
+        if not design:
+            continue
+        last_onset_s = design[-1][1]
+        derived_run_dur_s = last_onset_s + trial_duration_s + closing_blank_s
+        assert np.isclose(derived_run_dur_s, total_run_dur_s), (
+            f"Run {run_idx}: derived run length {derived_run_dur_s:.3f}s "
+            f"(last_onset_s={last_onset_s:.3f} + trial_duration_s={trial_duration_s} "
+            f"+ closing_blank_s={closing_blank_s}) does not match "
+            f"total_run_dur_s={total_run_dur_s}s. Update total_run_dur_s to "
+            f"{derived_run_dur_s:.3f}, or change opening_blank_s/trial_duration_s/"
+            f"closing_blank_s/n trials so the derived length matches."
+        )
+
     tasks = list(enumerate(_designs))
     saver = ResultSaver(_output_dir)
     all_results: dict = {}
 
     for combo in param_grid:
-        combo_tau_ms, combo_w, combo_rho = combo["tau_ms"], combo["w"], combo["rho"]
-        combo_suffix = _format_combo_suffix(combo_tau_ms, combo_w, combo_rho)
+        combo_tau_ms     = combo["tau_ms"]
+        combo_tau_ms_off = combo.get("tau_ms_off", None)
+        combo_w          = combo["w"]
+        combo_rho        = combo["rho"]
+        combo_suffix = _format_combo_suffix(combo_tau_ms, combo_w, combo_rho, combo_tau_ms_off)
         logger.info("Phase 2: assembling %d run(s) with %d worker(s) | combo%s",
                     len(_designs), n_workers, combo_suffix)
 
@@ -477,8 +518,8 @@ def run_pipeline(
                 initargs=(per_seq, hrf_kernel, total_run_dur_s,
                           cf_hz_used, tr_s, signal_dt_s, noise_models,
                           apply_adaptrans_flag, combo_w, K, rectify, combo_rho,
-                          combo_tau_ms,
-                          save_plots, plot_dir, combo_suffix),
+                          combo_tau_ms, combo_tau_ms_off,
+                          save_plots, plot_dir, combo_suffix, spont_rate_used),
             ) as pool:
                 results = pool.map(_assemble_one, tasks)
         else:
@@ -498,6 +539,8 @@ def run_pipeline(
                     rectify=rectify,
                     rho=combo_rho,
                     tau_ms=combo_tau_ms,
+                    tau_ms_off=combo_tau_ms_off,
+                    spont_rate=spont_rate_used,
                 )
                 bold_noisy_by_level = {
                     level: apply_run_noise(result["bold_combined"], noise_model, run_idx, tr_s)
@@ -527,7 +570,7 @@ def run_pipeline(
             "cf":                   cf,
             "alpha":                alpha,
             "pref_dur":             str(pref_dur),
-            "sigma_dur":            sigma_dur,
+            "sigma_dur":            str(sigma_dur) if pref_dur is not None else str(None),
             "tr_s":                 tr_s,
             "w":                    combo_w,
             "K":                    str(K),
@@ -535,6 +578,7 @@ def run_pipeline(
             "rho":                  combo_rho,
             "apply_adaptrans_flag": apply_adaptrans_flag,
             "tau_ms":               str(combo_tau_ms),
+            "tau_ms_off":           str(combo_tau_ms_off),
             **{k: v["bold_combined"] for k, v in all_runs.items()},
             **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
             **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},
@@ -583,12 +627,17 @@ if __name__ == "__main__":
     parser.add_argument("--no-adaptrans", action="store_true",
                         help="Disable AdapTrans (use the assembled boxcar train directly).")
     parser.add_argument("--tau_ms", type=float, default=ADAPTRANS_TAU_MS,
-                        help=f"AdapTrans time constant (ms). Free parameter, no CF relationship. "
+                        help=f"ON-filter time constant (ms). Free parameter, no CF relationship. "
                              f"Default: {ADAPTRANS_TAU_MS}.")
+    parser.add_argument("--tau_ms_off", type=float, default=ADAPTRANS_TAU_MS_OFF,
+                        help="OFF-filter time constant (ms). If not set, uses --tau_ms for both "
+                             "ON and OFF filters.")
     parser.add_argument("--tau_ms_sweep", type=float, nargs="+", default=None,
-                        help="Sweep multiple AdapTrans tau_ms values (overrides --tau_ms). "
+                        help="Sweep multiple ON tau_ms values (overrides --tau_ms). "
                              "E.g. --tau_ms_sweep 50 100 200. Phase 1 runs once; Phase 2 + "
-                             "a separate npz are produced per (tau_ms, w, rho) combo.")
+                             "a separate npz are produced per (tau_ms, tau_ms_off, w, rho) combo.")
+    parser.add_argument("--tau_ms_off_sweep", type=float, nargs="+", default=None,
+                        help="Sweep multiple OFF tau_ms values (overrides --tau_ms_off).")
     parser.add_argument("--w_sweep", type=float, nargs="+", default=None,
                         help="Sweep multiple AdapTrans w values (overrides --w).")
     parser.add_argument("--rho_sweep", type=float, nargs="+", default=None,
@@ -612,17 +661,17 @@ if __name__ == "__main__":
         for level in args.noise_voxels if level != "none"
     }
 
-    # Build the (tau_ms, w, rho) sweep grid. Each *_sweep flag falls back to
-    # the single-value --tau_ms/--w/--rho default when not given, so the
-    # no-sweep case still produces a one-combo grid (with a filename suffix).
+    # Build the (tau_ms, tau_ms_off, w, rho) sweep grid.
     import itertools
 
-    _tau_ms_values = args.tau_ms_sweep if args.tau_ms_sweep else [args.tau_ms]
-    _w_values      = args.w_sweep      if args.w_sweep      else [args.w]
-    _rho_values    = args.rho_sweep    if args.rho_sweep    else [args.rho]
+    _tau_ms_values     = args.tau_ms_sweep     if args.tau_ms_sweep     else [args.tau_ms]
+    _tau_ms_off_values = args.tau_ms_off_sweep if args.tau_ms_off_sweep else [args.tau_ms_off]
+    _w_values          = args.w_sweep          if args.w_sweep          else [args.w]
+    _rho_values        = args.rho_sweep        if args.rho_sweep        else [args.rho]
     _param_grid = [
-        {"tau_ms": t, "w": w, "rho": r}
-        for t, w, r in itertools.product(_tau_ms_values, _w_values, _rho_values)
+        {"tau_ms": t, "tau_ms_off": t_off, "w": w, "rho": r}
+        for t, t_off, w, r in itertools.product(
+            _tau_ms_values, _tau_ms_off_values, _w_values, _rho_values)
     ]
 
     run_pipeline(
