@@ -30,7 +30,7 @@ Typical usage
             (None,                                  30.0),   # null trial
             ("seq01_fc125hz_dur267ms_isi133ms_...", 40.0),   # repetition of seq01
         ],
-        total_run_dur_s = 720.0,
+        total_run_dur_s = 660.0,
         hrf_kernel      = hrf_kernel,
         cf_hz           = 440.0,
     )
@@ -108,8 +108,10 @@ def assemble_run_bold(
     rectify: bool = False,
     rho: float = 1.0,
     tau_ms: float = 100.0,
+    tau_ms_off: Optional[float] = None,
     tau_sus_ms: Optional[float] = None,
     beta_sus: float = 0.0,
+    spont_rate: Optional[float] = None,
 ) -> dict:
     """Assemble a full-run BOLD timeseries from per-stimulus boxcar trains.
 
@@ -150,8 +152,10 @@ def assemble_run_bold(
         rho > 1: onset-dominated.  rho = 1: equal weights (default).  rho < 1:
         offset-dominated.  Free parameter during model fitting.
     tau_ms : float
-        AdapTrans time constant (ms). Free parameter — no CF-tau relationship
+        ON-filter time constant (ms). Free parameter — no CF-tau relationship
         assumed. Default 100.0.
+    tau_ms_off : float or None
+        OFF-filter time constant (ms). If None, uses tau_ms for both ON and OFF.
     tau_sus_ms : float or None
         Time constant (ms) of the non-normalised sustained exponential channel
         ``y[n] = a·y[n-1] + x[n]``.  If None (default), no sustained channel
@@ -160,6 +164,12 @@ def assemble_run_bold(
         Amplitude weight for the sustained channel relative to AdapTrans.
         ``bold_combined = (rho·bold_on + bold_off) + beta_sus·bold_sus``.
         Only used when ``tau_sus_ms`` is not None.  Default 0.0 (no effect).
+    spont_rate : float or None
+        Spontaneous firing rate (same units as ``per_seq[...]["train"]``) used
+        to fill the run's opening/closing blank margins — the stretch before
+        the first trial's onset and after the last trial's offset, which
+        ``run_design`` never schedules a stimulus into. If None (default),
+        those margins stay at 0, i.e. the pre-existing behaviour.
 
     Returns
     -------
@@ -177,6 +187,8 @@ def assemble_run_bold(
     full_train = np.zeros(n_samples)
 
     missing = set()
+    min_onset_sample = n_samples
+    max_end_sample = 0
     for seq_id, onset_s in run_design:
         if seq_id is None or seq_id == "null":
             continue  # legacy fallback; normally null trials use SILENCE_SEQ_ID
@@ -198,9 +210,18 @@ def assemble_run_bold(
                            seq_id, (len(seq_train) - n_use) * signal_dt_s)
 
         full_train[onset_sample:end] += seq_train[:n_use]
+        min_onset_sample = min(min_onset_sample, onset_sample)
+        max_end_sample   = max(max_end_sample, end)
 
     if missing:
         logger.warning("seq_ids in run_design but not in per_seq: %s", missing)
+
+    # Fill the opening/closing blank margins (never covered by a scheduled
+    # trial) with the spontaneous rate, instead of leaving them at 0 — see
+    # spont_rate docstring.
+    if spont_rate is not None:
+        full_train[:min_onset_sample] = spont_rate
+        full_train[max_end_sample:n_samples] = spont_rate
 
     # Apply AdapTrans once across the full run
     if apply_adaptrans_flag:
@@ -213,6 +234,7 @@ def assemble_run_bold(
             pad_value=0.0,
             rectify=rectify,
             tau_ms=tau_ms,
+            tau_ms_off=tau_ms_off,
         )
         on_response  = on_off[0, 0, :]
         off_response = on_off[1, 0, :]

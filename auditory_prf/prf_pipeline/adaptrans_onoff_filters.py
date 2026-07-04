@@ -132,11 +132,12 @@ def apply_adaptrans(an_output: np.ndarray,
                     K: Optional[int] = None,
                     rectify: bool = False,
                     pad_value: Optional[float] = None,
-                    tau_ms: float = 100.0) -> np.ndarray:
+                    tau_ms: float = 100.0,
+                    tau_ms_off: Optional[float] = None) -> np.ndarray:
     """
     Apply AdapTrans ON/OFF filters to downsampled AN output.
 
-    tau_ms is a free parameter with no assumed relationship to CF.
+    tau_ms and tau_ms_off are free parameters with no assumed relationship to CF.
 
     Parameters
     ----------
@@ -149,7 +150,7 @@ def apply_adaptrans(an_output: np.ndarray,
     w : float
         Adaptation weight, same for all CFs. Default 0.8.
     K : int or None
-        Kernel length in samples. If None, auto-set to cover 3x tau_ms.
+        Kernel length in samples. If None, auto-set to cover 3x the longer tau.
     rectify : bool
         Half-wave rectify output (ReLU). Default False.
     pad_value : float or None
@@ -157,8 +158,10 @@ def apply_adaptrans(an_output: np.ndarray,
         If None, replicates signal[0] (standard causal padding). Pass 0.0
         for boxcar trains that start with non-zero amplitude at t=0.
     tau_ms : float
-        AdapTrans time constant (ms), applied uniformly to all CFs.
-        Default 100.0. Free parameter — no CF-tau relationship assumed.
+        ON-filter time constant (ms). Default 100.0.
+        Free parameter — no CF-tau relationship assumed.
+    tau_ms_off : float or None
+        OFF-filter time constant (ms). If None, uses tau_ms for both ON and OFF.
 
     Returns
     -------
@@ -168,23 +171,26 @@ def apply_adaptrans(an_output: np.ndarray,
     """
     N_CFs, T = an_output.shape
 
-    tau_vals = np.full(N_CFs, float(tau_ms))
-    logger.debug("Tau values (ms) for these CFs: %s", tau_vals)
-    a_vals   = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals]) # (N_CFs,)
+    tau_vals_on  = np.full(N_CFs, float(tau_ms))
+    tau_vals_off = np.full(N_CFs, float(tau_ms_off) if tau_ms_off is not None else float(tau_ms))
+    logger.debug("Tau ON  (ms): %s", tau_vals_on)
+    logger.debug("Tau OFF (ms): %s", tau_vals_off)
+    a_vals_on  = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals_on])
+    a_vals_off = np.array([tau_to_a(tau, dt_ms) for tau in tau_vals_off])
 
-    # auto-set K to cover 3x the longest time constant if not specified
+    # auto-set K to cover 3x the longest time constant across ON and OFF
     if K is None:
-        max_tau_samples = np.max(tau_vals) / dt_ms        # time constant in samples
-        K = int(np.ceil(3 * max_tau_samples))             # cover 3x the longest tau
+        max_tau_samples = np.max(np.concatenate([tau_vals_on, tau_vals_off])) / dt_ms
+        K = int(np.ceil(3 * max_tau_samples))
         logger.debug("Auto-set K=%d samples (3 x max tau=%.1fms / dt=%sms)",
-                      K, np.max(tau_vals), dt_ms)
+                      K, np.max(np.concatenate([tau_vals_on, tau_vals_off])), dt_ms)
 
     out_ON  = np.zeros((N_CFs, T))
     out_OFF = np.zeros((N_CFs, T))
 
     for i in range(N_CFs):
-        kernel_ON  = build_ON_kernel(a_vals[i], w, K)
-        kernel_OFF = build_OFF_kernel(a_vals[i], w, K)
+        kernel_ON  = build_ON_kernel(a_vals_on[i],  w, K)
+        kernel_OFF = build_OFF_kernel(a_vals_off[i], w, K)
 
         # causal padding: use pad_value if given, else replicate first sample
         signal = an_output[i]
@@ -196,7 +202,8 @@ def apply_adaptrans(an_output: np.ndarray,
 
         onset_idx = np.argmax(np.abs(np.diff(signal)) > 0)  # first transition
         off_idx   = onset_idx + int((signal > 0).sum())
-        logger.debug("CF %.0f Hz | tau=%.1fms | K=%d", CFs_Hz[i], tau_vals[i], K)
+        logger.debug("CF %.0f Hz | tau_on=%.1fms | tau_off=%.1fms | K=%d",
+                     CFs_Hz[i], tau_vals_on[i], tau_vals_off[i], K)
         logger.debug("  signal max:     %.4e", signal.max())
         logger.debug("  raw_ON  max:    %.4e  at t=%d", raw_ON.max(), raw_ON.argmax())
         logger.debug("  raw_ON  onset:  %.4e  (should be ~= signal.max())", raw_ON[onset_idx])

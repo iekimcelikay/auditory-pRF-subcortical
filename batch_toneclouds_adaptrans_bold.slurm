@@ -33,16 +33,19 @@ module load Miniforge3
 # ---- Environment Setup -------------------------------------------------------
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/toneclouds_gaussianprf_20260619_0114
+OUTPUT_DIR=$RESULTS_DIR/adaptrans_bold_symmetric_$(date +%Y%m%d)_job${SLURM_ARRAY_JOB_ID}
 
 # Run the Python script
 # One job per CF. tau_ms is a free parameter (no CF-tau relationship).
+# No --tau_ms_off passed below, so it defaults to None -> AdapTrans uses
+# tau_ms for both ON and OFF (symmetric case).
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python -m auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans \
     --cf $SLURM_ARRAY_TASK_ID \
     --results-dir $RESULTS_DIR \
-    --output-dir $RESULTS_DIR/adaptrans_bold \
-    --alpha 8 \
+    --output-dir $OUTPUT_DIR \
+    --alpha 4 \
     --tau_ms 100 \
     --noise_voxels low mid high \
     --noise_seed $((100 + SLURM_ARRAY_TASK_ID))
