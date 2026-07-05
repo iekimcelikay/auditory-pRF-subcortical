@@ -36,10 +36,10 @@ for npz_path in npz_files:
     d = np.load(npz_path, allow_pickle=False)
     cf_idx = int(d["cf_idx"])
     b = by_cf[cf_idx]
-    b["bias"].append(float(d["bias"]))
-    b["std"].append(float(d["std"]))
-    b["recovery_rate"].append(float(d["recovery_rate"]))
-    b["design_seed"].append(int(d["design_seed"]))
+    b["bias"].extend(d["bias"].tolist())
+    b["std"].extend(d["std"].tolist())
+    b["recovery_rate"].extend(d["recovery_rate"].tolist())
+    b["design_seed"].extend(d["design_seeds"].tolist())
     b["cf_hz"] = float(d["cf_hz_used"])
     for tau in TAU_GRID_MS:
         b["r2_pooled"][tau].extend(d[f"r2_tau{tau}"].tolist())
@@ -91,7 +91,7 @@ for col_i, cf_idx in enumerate(CF_INDICES):
         ax2.axvline(TAU_GT, color="firebrick", linestyle="--")
     ax2.set_xlabel("tau candidate (ms)", fontsize=7)
     ax2.tick_params(labelsize=6)
-axes[0, 0].set_ylabel(f"count (of {len(npz_files)//n_cf} designs)", fontsize=7)
+axes[0, 0].set_ylabel(f"count (of {len(by_cf[CF_INDICES[0]]['bias'])} designs)", fontsize=7)
 axes[1, 0].set_ylabel("pooled R2", fontsize=7)
 
 fig.suptitle(f"GT tau={TAU_GT}ms | single-run recovery across designs, by CF", fontsize=10)
