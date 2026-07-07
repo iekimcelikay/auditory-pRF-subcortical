@@ -411,7 +411,8 @@ def run_pipeline(
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id)
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, 30.0) # adding 30 ms
+            
             mean_rates_on = np.array([np.mean(c) for c in result["chunks"]])
 
             if save_plots:
