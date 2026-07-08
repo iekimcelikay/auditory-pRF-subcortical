@@ -235,7 +235,8 @@ def convolve_hrf_torch_causal(
 
     # Reshape for grouped convolution (treat batch as separate channels)
     padded_signal = padded_signal.unsqueeze(1)  # (batch, 1, n + kernel_len - 1)
-    kernel_1d = kernel.unsqueeze(0).unsqueeze(0)  # (1, 1, kernel_len)
+    # Flip kernel: F.conv1d is cross-correlation; flipping gives true convolution
+    kernel_1d = torch.flip(kernel, dims=[0]).unsqueeze(0).unsqueeze(0)  # (1, 1, kernel_len)
 
     # Convolve
     conv = torch.nn.functional.conv1d(padded_signal, kernel_1d, padding=0)

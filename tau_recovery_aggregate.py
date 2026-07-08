@@ -119,7 +119,7 @@ for col_i, w_val in enumerate(W_SWEEP):
             ax.legend(fontsize=6)
 
 plt.tight_layout()
-out_path = Path("tau_recovery_w_sweep.png")
+out_path = results_dir / "tau_recovery_w_sweep.png"
 fig.savefig(out_path, dpi=150, bbox_inches="tight")
 plt.close(fig)
 print(f"\nPlot saved → {out_path.resolve()}")

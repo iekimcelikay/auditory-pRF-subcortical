@@ -13,7 +13,7 @@ classdef pmNoise <  matlab.mixin.SetGet & matlab.mixin.Copyable
     % and the parameter noise2signal.
     %
     % Every particular instance of this class
-    % will have different parameters, so it will be a children class. For
+    % will have different parameqters, so it will be a children class. For
     % example:
     %
     %   - White noise (white)
