@@ -161,22 +161,29 @@ def main() -> None:
             sequence = sequence.astype(np.float32)
 
             cond_id  = _cond_id(g_idx, float(fb.means_hz[g_idx]), dur_ms, isi_ms_val, num_tones)
-            filename = f"{cond_id}.wav"
+            file_count += 1
+            # "wav{idx:03d}_" prefix records this file's eventual SLURM
+            # --wav-index (0 = silence, 1..N = the combos below, in the same
+            # order they're written here) directly in the filename, so the
+            # index-to-condition mapping doesn't rely on re-deriving
+            # sorted(glob()) order by hand.
+            filename = f"wav{file_count:03d}_{cond_id}.wav"
             save_sequence_as_wav(
                 sequence, SAMPLE_RATE, str(out_dir / filename), subtype=WAV_SUBTYPE,
             )
 
-            file_count += 1
             print(f"  [{file_count:>3}/{total_files}] {filename}")
 
-    # Silence WAV — null trial
+    # Silence WAV — null trial. Index 0 so it sorts first, matching its
+    # existing alphabetical-first position ("wav000_..." < "wav001_...").
     n_silence = int(SAMPLE_RATE * TOTAL_DURATION_S)
     silence   = np.zeros((n_silence, 2) if STEREO else (n_silence,), dtype=np.float32)
+    silence_filename = "wav000_noisecloud00_dur0ms_isi0ms.wav"
     save_sequence_as_wav(
-        silence, SAMPLE_RATE, str(out_dir / "noisecloud00_dur0ms_isi0ms.wav"),
+        silence, SAMPLE_RATE, str(out_dir / silence_filename),
         subtype=WAV_SUBTYPE,
     )
-    print(f"  [{file_count + 1:>3}/{total_files + 1}] noisecloud00_dur0ms_isi0ms.wav  (silence)")
+    print(f"  [{0:>3}/{total_files + 1}] {silence_filename}  (silence)")
     print(f"\nDone. Saved {file_count + 1} files to {out_dir}")
 
 

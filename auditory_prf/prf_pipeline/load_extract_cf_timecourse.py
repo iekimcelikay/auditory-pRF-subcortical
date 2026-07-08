@@ -1,4 +1,5 @@
 import numpy as np
+import re
 import sys
 from pathlib import Path
 
@@ -128,6 +129,10 @@ def load_population_psth(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, in
     population_psth = np.asarray(data["population_rate_psth"])   # (n_cfs, n_bins)
     time_axis       = np.asarray(data["time_axis"])
     raw_id  = str(data.get("soundfileid", npz_path.stem))
+    # Strip a leading "wav###_" SLURM-array-index prefix (added to stimulus
+    # filenames for on-disk traceability) so seq_id matching is unaffected
+    # by whether that prefix is present.
+    raw_id  = re.sub(r"^wav\d+_", "", raw_id)
     m       = _COND_ID_RE.search(raw_id)
     seq_id  = m.group(1) if m else raw_id
 
