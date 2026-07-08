@@ -284,6 +284,7 @@ ADAPTRANS_RECTIFY = True
 BOLD_RHO          = 1.0
 ADAPTRANS_TAU_MS      = 100.0   # ON-filter time constant; free parameter
 ADAPTRANS_TAU_MS_OFF  = None    # OFF-filter time constant; None = same as tau_ms
+CHUNK_MARGIN_MS       = 30.0    # extra window after tone offset used by chunk_from_id
 
 
 def run_pipeline(
@@ -411,8 +412,8 @@ def run_pipeline(
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, 30.0) # adding 30 ms
-            
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
+
             mean_rates_on = np.array([np.mean(c) for c in result["chunks"]])
 
             if save_plots:
@@ -580,6 +581,7 @@ def run_pipeline(
             "apply_adaptrans_flag": apply_adaptrans_flag,
             "tau_ms":               str(combo_tau_ms),
             "tau_ms_off":           str(combo_tau_ms_off),
+            "chunk_margin_ms":      CHUNK_MARGIN_MS,
             **{k: v["bold_combined"] for k, v in all_runs.items()},
             **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
             **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},

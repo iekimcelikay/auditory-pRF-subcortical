@@ -113,6 +113,7 @@ logger = logging.getLogger(__name__)
 
 EXP_NAME = "dipc_test_250225_01"
 DEFAULT_BASE_DIR = Path(f"./models_output/{EXP_NAME}")
+CHUNK_MARGIN_MS = 50.0    # extra window after tone offset used by chunk_from_id
 
 def _save_fig(fig, plot_dir: Path, name: str):
     """Save figure to plot_dir and close it."""
@@ -211,7 +212,7 @@ def run_pipeline(
             _save_fig(fig, plot_dir, f"01_powerlaw_{seq_id}.png")
 
         # 4. Chunk into tone-on windows
-        result, tone_dur_ms, isi_ms = chunk_from_id(sharpened, time_axis, seq_id)
+        result, tone_dur_ms, isi_ms = chunk_from_id(sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
         n_tones = len(result["chunks"])
         logger.debug("  Tone dur: %.1f ms | ISI: %.1f ms | n_tones %d",
                      tone_dur_ms, isi_ms, n_tones)
@@ -352,6 +353,7 @@ def run_pipeline(
             "apply_duration_gaussian": apply_duration_gaussian,
             "apply_adaptrans":         apply_adaptrans_flag,
             "rectify":                 rectify,
+            "chunk_margin_ms":         CHUNK_MARGIN_MS,
         }
 
     logger.info("Pipeline complete. %d sequence(s) processed for '%s'.",

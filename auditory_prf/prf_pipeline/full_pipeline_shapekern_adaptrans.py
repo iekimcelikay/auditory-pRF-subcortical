@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 EXP_NAME = "dipc_test_250225_01"
 DEFAULT_BASE_DIR = Path(f"./models_output/{EXP_NAME}")
+CHUNK_MARGIN_MS = 50.0    # extra window after tone offset used by chunk_from_id
 
 
 def run_pipeline(
@@ -86,7 +87,7 @@ def run_pipeline(
         sharpened = sharpened_pop[cf_index, :]
 
         # 4. Chunk into tone-on windows
-        result, tone_dur_ms, isi_ms = chunk_from_id(sharpened, time_axis, seq_id)
+        result, tone_dur_ms, isi_ms = chunk_from_id(sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
         n_tones = len(result["chunks"])
         logger.debug("  Tone dur: %.1f ms | ISI: %.1f ms | n_tones %d",
                      tone_dur_ms, isi_ms, n_tones)
@@ -139,6 +140,7 @@ def run_pipeline(
         "h_ON_shape":     h_ON_shape,
         "on_response":    on_response,
         "tone_dur_ms":    tone_dur_ms,
+        "chunk_margin_ms": CHUNK_MARGIN_MS,
     }
 
 

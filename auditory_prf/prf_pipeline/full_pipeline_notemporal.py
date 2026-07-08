@@ -81,6 +81,7 @@ CLOSING_BLANK_S  = 10.0
 ITI_RANGE_S      = 0
 N_RUNS           = 4
 BASE_SEED        = 42               # run k uses seed BASE_SEED + k
+CHUNK_MARGIN_MS  = 50.0             # extra window after tone offset used by chunk_from_id
 
 
 def run_pipeline(
@@ -176,7 +177,7 @@ def run_pipeline(
                          seq_id, cf_hz, spont_rate, len(train))
         else:
             # chunk into tone-ON windows
-            result, tone_dur_ms, isi_ms_val = chunk_from_id(sharpened, time_axis, seq_id)
+            result, tone_dur_ms, isi_ms_val = chunk_from_id(sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
             mean_rates_on = [np.mean(c) for c in result["chunks"]]
 
             # boxcar train: amplitude = raw mean rate (no duration Gaussian)
@@ -262,6 +263,7 @@ def run_pipeline(
             "cf":       cf,
             "alpha":    alpha,
             "tr_s":     tr_s,
+            "chunk_margin_ms": CHUNK_MARGIN_MS,
             **{k: v["bold_combined"] for k, v in all_runs.items()},
         },
         f"{exp_name}_notemporal_cf{cf:03d}_bold.npz",

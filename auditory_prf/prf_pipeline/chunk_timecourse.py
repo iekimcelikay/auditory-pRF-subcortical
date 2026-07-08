@@ -105,6 +105,7 @@ def chunk_timecourse(
         onsets_ms    : ndarray, shape (num_tones,)
         offsets_ms   : ndarray, shape (num_tones,)
         dt_ms        : float  — bin width in ms, inferred from time_axis_s
+        margin_ms    : float  — extra window after tone offset in ms
     """
     # -- infer bin width and convert time axis to ms -------------------------
     dt_ms        = (time_axis_s[1] - time_axis_s[0]) * 1000.0
@@ -140,6 +141,7 @@ def chunk_timecourse(
         "onsets_ms":   onsets_ms,
         "offsets_ms":  offsets_ms,
         "dt_ms":       dt_ms,
+        "margin_ms":   margin_ms,
     }
 
 def chunk_from_id(
@@ -167,7 +169,7 @@ def chunk_from_id(
     Returns
     -------
     result: dict
-        Full output from ``chunk_timecourse`` (chunks, axes, onsets, offsets, dt_ms).
+        Full output from ``chunk_timecourse`` (chunks, axes, onsets, offsets, dt_ms, margin_ms).
     tone_dur_ms : float
         Parsed tone duration in ms.
     isi_ms: float

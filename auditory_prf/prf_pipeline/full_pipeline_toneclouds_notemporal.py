@@ -134,6 +134,7 @@ CLOSING_BLANK_S   = 10.0
 ITI_RANGE_S       = 0
 N_RUNS            = 4
 BASE_SEED         = 42
+CHUNK_MARGIN_MS   = 50.0    # extra window after tone offset used by chunk_from_id
 
 
 def run_pipeline(
@@ -229,7 +230,7 @@ def run_pipeline(
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, _, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
+            result, _, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id, CHUNK_MARGIN_MS)
             mean_rates_on = apply_powerlaw_population(
                 np.array([np.mean(c) for c in result["chunks"]]), alpha
             )
@@ -330,6 +331,7 @@ def run_pipeline(
         "cf":       cf,
         "alpha":    alpha,
         "tr_s":     tr_s,
+        "chunk_margin_ms": CHUNK_MARGIN_MS,
         **{k: v["bold_combined"] for k, v in all_runs.items()},
     }
     if noise_model is not None:
