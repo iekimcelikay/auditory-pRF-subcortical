@@ -47,6 +47,7 @@ conda run -n strf3.9 python -m auditory_prf.prf_pipeline.full_pipeline_tonecloud
     --output-dir $OUTPUT_DIR \
     --alpha 4 \
     --tau_ms 100 \
+    --chunk_margin_ms 30 \
     --noise_voxels low mid high \
     --noise_seed $((100 + SLURM_ARRAY_TASK_ID))
 

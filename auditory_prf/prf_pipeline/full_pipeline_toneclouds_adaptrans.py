@@ -323,6 +323,8 @@ def run_pipeline(
         tau_ms: float = ADAPTRANS_TAU_MS,
         tau_ms_off: Optional[float] = ADAPTRANS_TAU_MS_OFF,
         param_grid: Optional[list[dict]] = None,
+        # chunking
+        chunk_margin_ms: float = CHUNK_MARGIN_MS,
         # plotting
         save_plots: bool = True,
         # parallelism
@@ -412,7 +414,7 @@ def run_pipeline(
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, chunk_margin_ms)
 
             mean_rates_on = np.array([np.mean(c) for c in result["chunks"]])
 
@@ -581,7 +583,7 @@ def run_pipeline(
             "apply_adaptrans_flag": apply_adaptrans_flag,
             "tau_ms":               str(combo_tau_ms),
             "tau_ms_off":           str(combo_tau_ms_off),
-            "chunk_margin_ms":      CHUNK_MARGIN_MS,
+            "chunk_margin_ms":      chunk_margin_ms,
             **{k: v["bold_combined"] for k, v in all_runs.items()},
             **{f"{k}_bold_on":  v["bold_on"]  for k, v in all_runs.items()},
             **{f"{k}_bold_off": v["bold_off"] for k, v in all_runs.items()},
@@ -645,6 +647,9 @@ if __name__ == "__main__":
                         help="Sweep multiple AdapTrans w values (overrides --w).")
     parser.add_argument("--rho_sweep", type=float, nargs="+", default=None,
                         help="Sweep multiple BOLD rho values (overrides --rho).")
+    parser.add_argument("--chunk_margin_ms", type=float, default=CHUNK_MARGIN_MS,
+                        help="Extra window (ms) after tone offset used by chunk_from_id. "
+                             f"Default: {CHUNK_MARGIN_MS}.")
     parser.add_argument("--no-plots", action="store_true",
                         help="Disable intermediate diagnostic plots.")
     parser.add_argument("--noise_voxels", nargs="+", choices=["none", "low", "mid", "high"],
@@ -687,6 +692,7 @@ if __name__ == "__main__":
         rectify=args.rectify,
         apply_adaptrans_flag=not args.no_adaptrans,
         param_grid=_param_grid,
+        chunk_margin_ms=args.chunk_margin_ms,
         save_plots=not args.no_plots,
         noise_models=_noise_models,
     )
