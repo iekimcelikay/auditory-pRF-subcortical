@@ -32,7 +32,7 @@ module load Miniforge3
 
 # ---- Environment Setup -------------------------------------------------------
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
-RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/noiseclouds_gaussianprf_20260602_1915
+RESULTS_DIR=$AUDITORY_PRF_ROOT/models_output/noiseclouds_gaussianprf_20260708_0433
 OUTPUT_DIR=$RESULTS_DIR/adaptrans_duration_bold_symmetric_$(date +%Y%m%d)_job${SLURM_ARRAY_JOB_ID}
 
 # Run the Python script
