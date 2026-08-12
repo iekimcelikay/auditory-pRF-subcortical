@@ -5,9 +5,6 @@ from pathlib import Path
 
 from auditory_prf.utils.result_saver import ResultSaver
 from auditory_prf.utils.timing_utils import COND_ID_RE as _COND_ID_RE
-from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
-from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
 
 def get_cf_timecourse(data: dict, cf) -> tuple[np.ndarray, int, float]:
     """Extract a single 1-D PSTH timecourse from a loaded .npz data dict.
@@ -140,51 +137,3 @@ def load_population_psth(npz_path: Path, cf) -> tuple[np.ndarray, np.ndarray, in
     seq_id  = m.group(1) if m else raw_id
 
     return population_psth, time_axis, cf_index, cf_hz, seq_id
-
-
-def build_per_seq_trains(npz_files, cf_idx, alpha, tc_silence_seq_id, chunk_margin_ms) -> tuple[dict, float]:
-    """Load per-sequence boxcar trains for one CF across a list of .npz files.
-
-    For each file: loads the population PSTH, applies power-law sharpening,
-    and chunks the sharpened timecourse into a boxcar train at the temporal
-    resolution of the stimulus sequence (silence sequences get a flat train
-    at the sharpened mean instead of being chunked).
-
-    Parameters
-    ----------
-    npz_files : list[Path]
-        Stimulus-sequence .npz files, one per call to ``load_population_psth``.
-    cf_idx : int or float
-        CF selector passed through to ``load_population_psth``.
-    alpha : float
-        Power-law exponent passed to ``apply_powerlaw_population``.
-    tc_silence_seq_id : str
-        seq_id that identifies the silence sequence (flat-train case).
-    chunk_margin_ms : float
-        Margin passed to ``chunk_from_id`` (extra window after tone offset).
-
-    Returns
-    -------
-    per_seq : dict[str, dict]
-        seq_id -> {"train": np.ndarray, "cf_hz": float}.
-    cf_hz_used : float
-        CF frequency in Hz resolved for cf_idx (same across all files).
-    """
-    per_seq = {}
-    cf_hz_used = None
-    for npz_path in npz_files:
-        population_psth, time_axis, cf_index, cf_hz, seq_id = load_population_psth(npz_path, cf_idx)
-        dt_s = time_axis[1] - time_axis[0]
-        total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
-        sharpened = apply_powerlaw_population(population_psth, alpha)[cf_index, :]
-        if seq_id == tc_silence_seq_id:
-            train = np.full(int(round(total_dur_ms)), float(np.mean(sharpened)))
-        else:
-            result, _, _ = chunk_from_id(sharpened, time_axis, seq_id, chunk_margin_ms)
-            train = build_prf_boxcar_train(
-                [np.mean(c) for c in result["chunks"]],
-                result["onsets_ms"], result["offsets_ms"], total_dur_ms, dt_ms=1.0,
-            )
-        per_seq[seq_id] = {"train": train, "cf_hz": cf_hz}
-        cf_hz_used = cf_hz
-    return per_seq, cf_hz_used
