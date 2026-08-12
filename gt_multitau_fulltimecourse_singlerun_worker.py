@@ -28,10 +28,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 
-from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_population_psth
-from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
-from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
+from auditory_prf.prf_pipeline.load_extract_cf_timecourse import build_per_seq_trains
 from auditory_prf.prf_pipeline.run_assembly import (
     generate_run_design, assemble_run_bold, apply_run_noise,
 )
@@ -39,7 +36,7 @@ from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans import (
     BAND_CENTERS_HZ, TOTAL_SEQ_DUR_S, STIMULUS_SAMPLE_RATE, TC_SILENCE_SEQ_ID,
     TONE_ON_MS, ISI_MS, NULL_FRACTION, TRIAL_DURATION_S, OPENING_BLANK_S,
-    _make_tonecloud_seq_id_fn,
+    CHUNK_MARGIN_MS, _make_tonecloud_seq_id_fn,
 )
 from prf_models.pm_noise import PmNoise
 
@@ -79,23 +76,7 @@ print(f"Output -> {out_path}")
 
 # ── Phase 1: load cochlear PSTHs (all 3 bands) -- ONCE for this CF ───────────
 npz_files = sorted(RESULTS_DIR.glob("wav*/**/*.npz"))
-per_seq = {}
-cf_hz_used = None
-for npz_path in npz_files:
-    population_psth, time_axis, cf_index, cf_hz, seq_id = load_population_psth(npz_path, CF_IDX)
-    dt_s = time_axis[1] - time_axis[0]
-    total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
-    sharpened = apply_powerlaw_population(population_psth, ALPHA)[cf_index, :]
-    if seq_id == TC_SILENCE_SEQ_ID:
-        train = np.full(int(round(total_dur_ms)), float(np.mean(sharpened)))
-    else:
-        result, _, _ = chunk_from_id(sharpened, time_axis, seq_id)
-        train = build_prf_boxcar_train(
-            [np.mean(c) for c in result["chunks"]],
-            result["onsets_ms"], result["offsets_ms"], total_dur_ms, dt_ms=1.0,
-        )
-    per_seq[seq_id] = {"train": train, "cf_hz": cf_hz}
-    cf_hz_used = cf_hz
+per_seq, cf_hz_used = build_per_seq_trains(npz_files, CF_IDX, ALPHA, TC_SILENCE_SEQ_ID, CHUNK_MARGIN_MS)
 
 seq_id_fn = _make_tonecloud_seq_id_fn(BAND_CENTERS_HZ, TOTAL_SEQ_DUR_S, STIMULUS_SAMPLE_RATE)
 n_gaussians = len(BAND_CENTERS_HZ)
