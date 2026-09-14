@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from auditory_prf.prf_pipeline.full_pipeline_with_adaptrans import run_pipeline
+from auditory_prf.prf_pipeline.DEP_full_pipeline_with_adaptrans import run_pipeline
 
 EXP_NAME = "dipc_test_250225_01"
 RESULTS_DIR = Path(f"./models_output/{EXP_NAME}")

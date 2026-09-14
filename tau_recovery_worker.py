@@ -17,7 +17,7 @@ from pathlib import Path
 from auditory_prf.prf_pipeline.load_extract_cf_timecourse import build_per_seq_trains
 from auditory_prf.prf_pipeline.run_assembly import assemble_run_bold
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, convolve_hrf, SUBCORTICAL_PARAMS
-from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans import CHUNK_MARGIN_MS
+from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import CHUNK_MARGIN_MS
 from prf_models.pm_noise import PmNoise, apply_bold_noise
 
 # ── Sweep parameters (must match tau_recovery_aggregate.py) ───────────────────

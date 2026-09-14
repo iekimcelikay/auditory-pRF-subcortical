@@ -150,7 +150,7 @@ def apply_adaptrans(an_output: np.ndarray,
     w : float
         Adaptation weight, same for all CFs. Default 0.8.
     K : int or None
-        Kernel length in samples. If None, auto-set to cover 3x the longer tau.
+        Kernel length in samples. If None, auto-set to cover 3x +1 the longer tau.
     rectify : bool
         Half-wave rectify output (ReLU). Default False.
     pad_value : float or None
@@ -181,7 +181,7 @@ def apply_adaptrans(an_output: np.ndarray,
     # auto-set K to cover 3x the longest time constant across ON and OFF
     if K is None:
         max_tau_samples = np.max(np.concatenate([tau_vals_on, tau_vals_off])) / dt_ms
-        K = int(np.ceil(3 * max_tau_samples))
+        K = int(np.ceil(3 * max_tau_samples)) 
         logger.debug("Auto-set K=%d samples (3 x max tau=%.1fms / dt=%sms)",
                       K, np.max(np.concatenate([tau_vals_on, tau_vals_off])), dt_ms)
 

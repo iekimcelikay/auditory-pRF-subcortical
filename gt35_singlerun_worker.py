@@ -41,7 +41,7 @@ from auditory_prf.prf_pipeline.run_assembly import (
     generate_run_design, assemble_run_bold, apply_run_noise, convolve_hrf,
 )
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
-from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans import (
+from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import (
     BAND_CENTERS_HZ, TOTAL_SEQ_DUR_S, STIMULUS_SAMPLE_RATE, TC_SILENCE_SEQ_ID,
     TONE_ON_MS, ISI_MS, NULL_FRACTION, TRIAL_DURATION_S, OPENING_BLANK_S,
     CHUNK_MARGIN_MS, _make_tonecloud_seq_id_fn,

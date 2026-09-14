@@ -50,89 +50,15 @@ from prf_models.pm_noise import PmNoise
 
 logger = logging.getLogger(__name__)
 
-# TODOS - housekeeping
-# //[ ] AESTHETHICS: Move plotting functions to their own script in the future
-# TODOS - functional:
+# TODO - housekeeping
+# [x] AESTHETHICS: Move plotting functions to their own script in the future
 
-
-# ── plotting helpers ──────────────────────────────────────────────────────────
-def _save_fig(fig, plot_dir: Path, name: str):
-    """Save figure to plot_dir and close it."""
-    fig.savefig(plot_dir / name, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    logger.debug("  Saved plot: %s", name)
-
-
-def _plot_sharpening(raw_rates, sharpened_rates, alpha, seq_id, plot_dir):
-    """Phase 1 plot: per-tone mean rates before and after power-law sharpening."""
-    n_tones = len(raw_rates)
-    tone_indices = np.arange(1, n_tones + 1)
-    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    axes[0].bar(tone_indices, raw_rates, color='steelblue', edgecolor='k', linewidth=0.5)
-    axes[0].set_ylabel("Mean rate (spk/s)")
-    axes[0].set_title(f"Raw mean rates per tone — {seq_id}")
-    axes[1].bar(tone_indices, sharpened_rates, color='darkorange', edgecolor='k', linewidth=0.5)
-    axes[1].set_ylabel("Mean rate (spk/s)")
-    axes[1].set_xlabel("Tone number")
-    axes[1].set_title(f"After power-law sharpening (α={alpha})")
-    _save_fig(fig, plot_dir, f"01_sharpening_{seq_id}.png")
-
-
-def _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir):
-    """Phase 1 plot: sharpened mean firing rate per tone-ON chunk."""
-    n_tones = len(mean_rates_on)
-    tone_indices = np.arange(1, n_tones + 1)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.bar(tone_indices, mean_rates_on, color='teal', edgecolor='k', linewidth=0.5)
-    ax.set_xlabel("Tone number")
-    ax.set_ylabel("Mean rate (spk/s)")
-    ax.set_title(f"Tone-ON mean rates (sharpened) — {seq_id}")
-    _save_fig(fig, plot_dir, f"02_chunk_mean_rates_{seq_id}.png")
-
-
-def _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir, combo_suffix=""):
-    # // [ ]: Add optional Duration Gaussian
-    """Phase 2 plot: assembled boxcar train + AdapTrans ON/OFF for one run."""
-    n_1ms = len(result["full_train"])
-    time_1ms = np.arange(n_1ms)
-    fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
-    axes[0].plot(time_1ms, result["full_train"], linewidth=0.6, color='gray')
-    axes[0].set_ylabel("Amplitude")
-    axes[0].set_title(f"Assembled boxcar train — run {run_idx + 1:02d}{combo_suffix}")
-    axes[1].plot(time_1ms, result["on_response"], linewidth=0.6, color='crimson')
-    axes[1].set_ylabel("ON response")
-    axes[1].set_title(f"AdapTrans ON (w={w}, CF={cf_hz:.0f} Hz)")
-    axes[2].plot(time_1ms, result["off_response"], linewidth=0.6, color='royalblue')
-    axes[2].set_ylabel("OFF response")
-    axes[2].set_xlabel("Time (ms)")
-    axes[2].set_title("AdapTrans OFF")
-    _save_fig(fig, plot_dir, f"03_adaptrans_run{run_idx + 1:02d}{combo_suffix}.png")
-
-
-def _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir, combo_suffix=""):
-    """Phase 2 plot: BOLD ON / OFF / combined for one run."""
-    t_tr = result["t_tr"]
-    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
-    axes[0].plot(t_tr, result["bold_on"], 'o-', ms=4, color='crimson')
-    axes[0].set_ylabel("BOLD (a.u.)")
-    axes[0].set_title(f"BOLD ON — run {run_idx + 1:02d}{combo_suffix} | CF={cf_hz:.0f} Hz | TR={tr_s:.2f}s")
-    axes[1].plot(t_tr, result["bold_off"], 'o-', ms=4, color='royalblue')
-    axes[1].set_ylabel("BOLD (a.u.)")
-    axes[1].set_title("BOLD OFF")
-    axes[2].plot(t_tr, result["bold_combined"], 'o-', ms=4, color='forestgreen')
-    axes[2].set_ylabel("BOLD (a.u.)")
-    axes[2].set_xlabel("Time (s)")
-    axes[2].set_title(f"BOLD combined (rho * ON + OFF, rho={rho})")
-    _save_fig(fig, plot_dir, f"04_bold_run{run_idx + 1:02d}{combo_suffix}.png")
-
-
-def _save_run_plots(run_idx, result, cf_hz, w, rho, tr_s, plot_dir, combo_suffix=""):
-    """Save both Phase 2 (per-run) diagnostic plots."""
-    _plot_run_adaptrans(run_idx, result, cf_hz, w, plot_dir, combo_suffix)
-    _plot_run_bold(run_idx, result, cf_hz, tr_s, rho, plot_dir, combo_suffix)
 
 
 def _strip_signal_arrays(result: dict) -> dict:
+    # TODO: DEBUG
+    # 
+    # NOTE: 
     """Drop the 1 ms-resolution arrays (full_train, on/off_response).
 
     Only the much smaller TR-resolution arrays (bold_on, bold_off,
@@ -265,8 +191,10 @@ DEFAULT_BASE_DIR  = Path(f"./models_output/{EXP_NAME}")
 # Float durations from find_closest_durations() in find_optimal_durations.py.
 # Must be floats (not rounded ints) so that numtones computation matches
 # calculate_num_tones() used during WAV generation.
-TONE_ON_MS       = (34.89, 44.76, 60.14, 75.38, 100.44, 149.72, 247.58, 496.43)
+# TODO: I need to recheck the tone duration and ISI values and somehow implement it here or as a reminder. Maybe constant with if else?
+# [ ] Run find_optimal_durations first 
 
+TONE_ON_MS       = (34.89, 44.76, 60.14, 75.38, 100.44, 149.72, 247.58, 496.43)
 ISI_MS           = (75,) * len(TONE_ON_MS)
 NULL_FRACTION    = 0.25
 TRIAL_DURATION_S  = 20.0
@@ -274,12 +202,14 @@ TR_S              = 1.6
 OPENING_BLANK_S   = 4 * TR_S           # 4 TRs
 CLOSING_BLANK_S   = 4 * TR_S           # 4 TRs
 ITI_RANGE_S       = 0
-N_RUNS            = 24
-BASE_SEED         = 42
+N_RUNS            = 24 # TODO alkdfjkldjf 
+BASE_SEED         = 42 # NOTE 
+
 
 # ── AdapTrans / BOLD defaults ──────────────────────────────────────────────────
 ADAPTRANS_W       = 0.8
-ADAPTRANS_K       = None    # auto-set (3x longest CF time constant)
+ADAPTRANS_K       = None    # auto-set (3x longest CF time constant) --> # NOTE: yani cf time constant 20 ms ise, kernel sadece 60 ms calisacak. 
+# FIXME: KERNEL LENGTH SHOULD BE 3 X TAU_MAX +1. tau_max is the time constant of the lowest cochleagram frequency band. 
 ADAPTRANS_RECTIFY = True
 BOLD_RHO          = 1.0
 ADAPTRANS_TAU_MS      = 100.0   # ON-filter time constant; free parameter
@@ -406,7 +336,7 @@ def run_pipeline(
         sharpened_pop   = apply_powerlaw_population(population_psth, alpha)
         cf_tc_raw       = population_psth[cf_index, :]
         cf_tc_sharpened = sharpened_pop[cf_index, :]
-
+        # If silence, than rather than chunking take the mean, which is the spontaneous rate, and build a flat train of that value
         if seq_id == TC_SILENCE_SEQ_ID:
             spont_rate = float(np.mean(cf_tc_sharpened))
             n_samples  = int(round(total_dur_ms))

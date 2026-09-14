@@ -195,6 +195,17 @@ Duration tuning is explicit and parametric via a Gaussian. There are no onset/of
 | τ_ON | Time constant of onset filter | 10–500 ms |
 | τ_OFF | Time constant of offset filter | 10–500 ms |
 
+| Parameter | Description | Range |
+|---|---|---|
+| CF index | Voxel's preferred frequency | 
+| α | Spectral sharpening exponent |
+| pref_dur | Voxel's preferred tone duration | 
+| σ_dur | Width of duration tuning |
+| w | Sustained vs. transient balance (0=sustained, 1=transient) | 0–1 |
+| ON weight | Scaling of onset response | 
+| OFF weight | Scaling of offset response | 
+| τ_ON | Time constant of onset filter | 
+| τ_OFF | Time constant of offset filter | 
 **Total free parameters per voxel: 9**
 
 This is the most complex model and the one requiring the most careful simulation validation. The key concern is **parameter coupling** between `pref_dur` and `τ_ON/τ_OFF`, because both mechanisms produce duration-dependent response profiles (see Section 4.7).
