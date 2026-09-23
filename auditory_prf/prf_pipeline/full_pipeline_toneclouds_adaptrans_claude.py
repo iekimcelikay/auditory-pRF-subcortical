@@ -279,7 +279,7 @@ TR_S              = 1.6
 OPENING_BLANK_S   = 4 * TR_S           # 4 TRs
 CLOSING_BLANK_S   = 4 * TR_S           # 4 TRs
 ITI_RANGE_S       = 0
-N_RUNS            = 24 # TODO alkdfjkldjf 
+N_RUNS            = 24 # TODO 
 BASE_SEED         = 42 # NOTE 
 
 
