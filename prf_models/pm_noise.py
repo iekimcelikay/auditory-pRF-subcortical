@@ -50,35 +50,37 @@ class PmAdapter:
 # ---------------------------------------------------------------------------
 
 def spm_drift(n_timepoints: int, n_basis: int) -> np.ndarray:
-    """Discrete cosine drift basis matrix, matching SPM's spm_drift.m exactly.
+    """Discrete cosine drift basis matrix matching the project's gari_pmNoise spm_drift.m.
 
-    Implements SPM's type-II DCT (1-indexed, midpoint sampling):
+    The project's MATLAB implementation (prf_models/spm_drift.m) differs from
+    the canonical SPM toolbox function: non-DC columns carry an extra factor of
+    10, as documented in that file's comment ("scaled pretty arbitrarily by
+    sqrt(2/N)*10").  This port reproduces that behaviour exactly.
 
-        C[i, j] = sqrt(2/N) * cos(pi * (2i-1) * (j-1) / (2*N))
-        C[:, 0] /= sqrt(2)   # DC column normalisation → 1/sqrt(N)
-
-    This produces orthonormal columns (unit L2 norm), identical to the output
-    of MATLAB's ``spm_drift(N, n_basis)``.
+        DC  column (j=0): C[:, 0] = 1 / sqrt(N)
+        non-DC columns  : C[:, j] = sqrt(2/N) * 10 * cos(pi*(2i-1)*(j)/(2N))
+                          for i = 1..N, j = 1..n_basis-1
 
     Parameters
     ----------
     n_timepoints : int
-        Number of time points (rows), equivalent to ``k`` in SPM notation.
+        Number of time points (rows).
     n_basis : int
-        Number of basis functions including the DC (constant) term,
-        equivalent to ``N`` in SPM notation.
+        Number of basis functions including the DC (constant) term.
 
     Returns
     -------
     np.ndarray, shape (n_timepoints, n_basis)
-        Orthonormal columns; column 0 is the DC term (constant, unit norm).
+        Column 0 is the DC term (1/sqrt(N)); columns 1+ are the drift basis
+        scaled by 10 relative to a unit-norm DCT.
     """
     i = np.arange(1, n_timepoints + 1, dtype=float).reshape(-1, 1)  # 1..N
     j = np.arange(1, n_basis + 1,      dtype=float).reshape(1, -1)  # 1..n_basis
     C = np.sqrt(2.0 / n_timepoints) * np.cos(
         np.pi * (2.0 * i - 1.0) * (j - 1.0) / (2.0 * n_timepoints)
     )
-    C[:, 0] /= np.sqrt(2.0)  # DC column: sqrt(2/N) * 1 / sqrt(2) = 1/sqrt(N)
+    C[:, 0] /= np.sqrt(2.0)   # DC: 1/sqrt(N)
+    C[:, 1:] *= 10.0           # non-DC: factor of 10 matching MATLAB version
     return C
 
 

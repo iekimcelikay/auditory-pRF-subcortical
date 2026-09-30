@@ -33,10 +33,11 @@ C = spm_drift(100, 5)
 ok = C.shape == (100, 5)
 print(f"  shape {C.shape}  {'✓' if ok else 'FAILED: expected (100, 5)'}")
 
-print("\nTest 2: all columns have unit length (normalized)")
+print("\nTest 2: column norms match project convention (DC=1, non-DC=10)")
 col_norms = np.sqrt(np.sum(C ** 2, axis=0))
-ok = np.allclose(col_norms, 1.0)
-print(f"  column norms: {np.round(col_norms, 6)}  {'✓' if ok else 'FAILED: not unit length'}")
+expected_norms = np.array([1.0] + [10.0] * (C.shape[1] - 1))
+ok = np.allclose(col_norms, expected_norms, atol=1e-10)
+print(f"  column norms: {np.round(col_norms, 6)}  {'✓' if ok else f'FAILED: expected {expected_norms}'}")
 
 print("\nTest 3: first column (DC term) is constant before normalization")
 # Before normalization the DC column is all-ones, so after normalization all
@@ -440,7 +441,10 @@ ok = noisy.shape == (200,)
 print(f"  shape {noisy.shape}  {'✓' if ok else 'FAILED'}")
 
 print("\nTest 42: noise is actually added (noisy != clean with non-zero amplitudes)")
-ok = not np.allclose(noisy, bold)
+# bold must be non-zero so signal_scale = std(bold)/REFERENCE_BOLD_STD > 0
+bold_nonzero = np.sin(np.linspace(0, 2 * np.pi, 200)) * 0.03
+noisy_nz = apply_bold_noise(bold_nonzero.copy(), PmNoise(pm=None, seed=1, voxel='mid'), tr_s=1.5)
+ok = not np.allclose(noisy_nz, bold_nonzero)
 print(f"  noise added: {ok}  {'✓' if ok else 'FAILED'}")
 
 print("\nTest 43: fixed seed produces reproducible noisy BOLD")
@@ -507,35 +511,31 @@ def _spm_drift_official(k: int, N: int) -> np.ndarray:
     return C
 
 print(
-    "\nTest 45: spm_drift columns are unit-norm AND"
-    " close to SPM official formula"
+    "\nTest 45: spm_drift matches project MATLAB version (DC norm=1, non-DC norm=10)"
 )
 n_basis_ref = int(np.floor(2 * (100 * 2) / 120 + 1))  # = 4
-C_py = spm_drift(100, n_basis_ref)
-C_spm = _spm_drift_official(100, n_basis_ref)
+C_py  = spm_drift(100, n_basis_ref)
+C_spm = _spm_drift_official(100, n_basis_ref)   # unit-norm reference
 
 py_norms  = np.linalg.norm(C_py,  axis=0)
 spm_norms = np.linalg.norm(C_spm, axis=0)
-unit_norm_ok = np.allclose(py_norms, 1.0) and np.allclose(spm_norms, 1.0)
-max_col_diff = np.max(np.abs(C_py - C_spm))
 
-print(f"  Python column norms: {np.round(py_norms, 8)}")
-print(f"  SPM   column norms: {np.round(spm_norms, 8)}")
-print(f"  Both unit-norm: {unit_norm_ok}  {'✓' if unit_norm_ok else 'FAILED'}")
-print(f"  Max abs element-wise diff (Python vs SPM): {max_col_diff:.8f}")
-print(
-    f"  {'✓ Exact match (< 1e-12)' if max_col_diff < 1e-12 else f'WARN: diff={max_col_diff:.2e} — formula mismatch'}"
-)
+# Project MATLAB version has factor-10 non-DC columns
+expected_py_norms = np.array([1.0] + [10.0] * (n_basis_ref - 1))
+norm_ok = np.allclose(py_norms, expected_py_norms, atol=1e-10)
+
+# Non-DC columns should equal 10 * SPM unit-norm columns
+max_nondc_diff = np.max(np.abs(C_py[:, 1:] - 10.0 * C_spm[:, 1:]))
+nondc_ok = max_nondc_diff < 1e-10
+
+print(f"  Python column norms: {np.round(py_norms, 6)}  (expected: {expected_py_norms})")
+print(f"  SPM unit-norm norms: {np.round(spm_norms, 6)}")
+print(f"  Python norms correct: {norm_ok}  {'✓' if norm_ok else 'FAILED'}")
+print(f"  Non-DC = 10 × SPM: max diff = {max_nondc_diff:.2e}  {'✓' if nondc_ok else 'FAILED'}")
 print()
 print(
-    "  NOTE: Python uses x=i/n indexing; SPM uses (2i-1)/(2n) midpoint"
-    " indexing."
-)
-print(
-    "  Both produce unit-norm columns but differ by up to ~0.002 per element."
-)
-print(
-    "  ACTION FOR CO-SUPERVISOR: confirm which convention is intended."
+    "  NOTE: project spm_drift.m scales non-DC columns by 10 vs standard SPM."
+    " This is intentional (see MATLAB file comment)."
 )
 
 # -- R_result diagnostic ---------------------------------------------------
