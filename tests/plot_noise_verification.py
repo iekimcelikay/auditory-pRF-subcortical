@@ -26,7 +26,8 @@ import numpy as np
 # ─── project path ─────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-from prf_models.pm_noise import PmNoise, PmAdapter, spm_drift, REFERENCE_BOLD_STD
+from prf_models.pm_noise import PmNoise, PmAdapter, spm_drift, REFERENCE_BOLD_STD, apply_bold_noise
+from fig4_snr_paradigm import FIG4_TARGETS_DB, build_clean_bold_and_pm, fit_sinusoid_snr_db
 
 MATLAB_DIR = Path(__file__).parent / 'matlab_verification'
 MATLAB_DIR.mkdir(exist_ok=True)
@@ -232,10 +233,16 @@ plt.close(fig2)
 #   low = +5.29 dB,  mid = −0.51 dB,  high = −4.29 dB
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TARGETS = {'low': 5.29, 'mid': -0.51, 'high': -4.29}
+TARGETS = FIG4_TARGETS_DB
 N_SNR   = 300    # seeds per voxel level
 
-pm_snr = PmAdapter(TR=TR, time_points_n=N, time_points_series=T)
+# End-to-end check: simulate the paper's 8-cycle calibration stimulus, run it
+# through apply_bold_noise() (the function the real pipeline actually calls),
+# then measure SNR the way the paper describes (harmonic-fit residual) --
+# rather than the closed-form shortcut this used to compute directly from
+# REFERENCE_BOLD_STD without ever touching apply_bold_noise(). See
+# fig4_snr_paradigm.py and tests/test_pm_noise.py Test 48 for the same check.
+clean_bold_psc, pm_snr = build_clean_bold_and_pm()
 
 print("── SNR calibration ───────────────────────────────────────────")
 print(f"{'Voxel':<6}  {'mean (dB)':>10}  {'SD (dB)':>8}  {'target (dB)':>12}  {'diff':>6}")
@@ -245,10 +252,10 @@ snr_data = {}
 for voxel, _ in levels:
     snrs = []
     for seed in range(N_SNR):
-        noise = PmNoise(pm=pm_snr, seed=seed, voxel=voxel)
-        noise.compute()
-        # SNR referenced to REFERENCE_BOLD_STD (= 3% PSC)
-        snr_db = 20 * np.log10(REFERENCE_BOLD_STD / noise.values.std())
+        noisy_bold_psc = apply_bold_noise(
+            clean_bold_psc.copy(), PmNoise(pm=pm_snr, seed=seed, voxel=voxel), pm_snr.TR
+        )
+        snr_db = fit_sinusoid_snr_db(noisy_bold_psc)
         snrs.append(snr_db)
     snr_data[voxel] = np.array(snrs)
     m, s = snr_data[voxel].mean(), snr_data[voxel].std()
@@ -260,7 +267,8 @@ print()
 fig3, (ax_bar, ax_dist) = plt.subplots(1, 2, figsize=(12, 5))
 fig3.suptitle(
     f'SNR calibration — Python port vs published targets (Lerma-Usabiaga et al.)\n'
-    f'{N_SNR} seeds per voxel level  |  reference BOLD std = {REFERENCE_BOLD_STD:.1%} PSC',
+    f'{N_SNR} seeds/level  |  8-cycle stimulus through apply_bold_noise(), '
+    f'harmonic-fit SNR  |  REFERENCE_BOLD_STD = {REFERENCE_BOLD_STD:.1%} PSC',
     fontsize=11
 )
 

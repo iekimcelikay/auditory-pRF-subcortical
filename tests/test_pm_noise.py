@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # non-interactive backend so plot() doesn't open a window
 
-from prf_models.pm_noise import PmNoise, PmAdapter, apply_bold_noise, spm_drift
+from prf_models.pm_noise import PmNoise, PmAdapter, apply_bold_noise, spm_drift, REFERENCE_BOLD_STD
 
 print("Testing prf_models.pm_noise")
 print("=" * 60)
@@ -649,3 +649,60 @@ except ValueError as e:
 
 print("\n" + "=" * 60)
 print("Done (MATLAB verification additions).")
+
+
+# ===========================================================================
+# Fig 4 SNR reproduction (paper Methods, harmonic-fit residual)
+#
+# Lerma-Usabiaga et al. Methods (from the paper, quoted verbatim by the user):
+#   TR = 1.5 s, cycle = 24 s (0.042 Hz stimulus frequency), 8 cycles/run,
+#   PSC contrast selected in the 8-12% range, single acquisition per run.
+#   "SNR was calculated by the ratio of the root mean squared error of the
+#   signal (the fitted sinusoidal) and the noise (time series minus the
+#   fitted sinusoidal)."
+#
+# This section checks whether REFERENCE_BOLD_STD reproduces the paper's Fig 4
+# target SNRs (low=5.29dB, mid=-0.51dB, high=-4.29dB) when the SNR is
+# computed the way the paper describes, rather than a raw std ratio.
+# REFERENCE_BOLD_STD's own docstring in pm_noise.py documents how the current
+# value (0.0323) was derived and cross-checked against this same test.
+# ===========================================================================
+
+print("\n-- Fig 4 SNR reproduction (harmonic-fit residual) --")
+
+from fig4_snr_paradigm import (  # noqa: E402
+    TR_S as TR_FIG4_S, N_TR as n_tr_fig4, FIG4_TARGETS_DB,
+    build_clean_bold_and_pm, fit_sinusoid_snr_db,
+)
+
+N_REALIZATIONS = 500
+
+print("\nTest 48: REFERENCE_BOLD_STD reproduces Fig 4 SNRs under the paper's harmonic-fit metric")
+clean_bold_psc, pm_fig4 = build_clean_bold_and_pm()
+
+print(f"  n_TR={n_tr_fig4}, run_duration={n_tr_fig4 * TR_FIG4_S:.1f}s, REFERENCE_BOLD_STD={REFERENCE_BOLD_STD}")
+for voxel, target_db in FIG4_TARGETS_DB.items():
+    snr_db_samples = np.empty(N_REALIZATIONS)
+    for i in range(N_REALIZATIONS):
+        noisy_bold_psc = apply_bold_noise(
+            clean_bold_psc.copy(), PmNoise(pm=pm_fig4, seed=i, voxel=voxel), TR_FIG4_S
+        )
+        snr_db_samples[i] = fit_sinusoid_snr_db(noisy_bold_psc)
+    mean_db = snr_db_samples.mean()
+    std_db = snr_db_samples.std()
+    within_2sd = abs(mean_db - target_db) < 2 * std_db
+    print(
+        f"  {voxel:5s}  mean_SNR={mean_db:6.2f}dB  std={std_db:5.2f}dB  "
+        f"target={target_db:6.2f}dB  {'✓ within 2*std' if within_2sd else 'FAILED: outside 2*std'}"
+    )
+
+print()
+print(
+    "  ACTION FOR CO-SUPERVISOR: PSC_AMPLITUDE (0.05, i.e. 10% peak-to-peak)"
+    " and the single-cycle sinusoid fit are read off the paper's Methods text"
+    " directly. If REFERENCE_BOLD_STD is retuned, target_db values above are"
+    " the ones it should keep reproducing."
+)
+
+print("\n" + "=" * 60)
+print("Done (Fig 4 SNR reproduction).")

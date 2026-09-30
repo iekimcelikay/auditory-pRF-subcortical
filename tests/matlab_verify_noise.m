@@ -5,14 +5,12 @@
 %
 % Usage
 % -----
-%   1. Add SPM to your MATLAB path (needed for spm_drift):
-%        addpath('/path/to/spm12')
-%   2. Run this script from any directory:
+%   Run this script from any directory:
 %        run('/path/to/tests/matlab_verify_noise.m')
 %
 % Outputs
 % -------
-%   tests/matlab_verification/
+%             tests/matlab_verification/
 %       spm_drift.csv          — full (N x n_basis) drift basis matrix
 %       drift_signal.csv       — drift component signal (N x 1)
 %       cardiac_jitter0.csv    — cardiac sinusoid, jitter=0 (N x 1)
@@ -43,20 +41,27 @@ a_drift    = 0.01;   f_drift    = 120.0; % seconds (period)
 n_basis = floor(2 * (N * TR) / f_drift + 1);
 fprintf('n_basis for drift: %d\n', n_basis);
 
-% Try SPM's spm_drift; fall back to inline formula if SPM is not on the path
-if exist('spm_drift', 'file')
-    C = spm_drift(N, n_basis);
-    fprintf('spm_drift: using SPM toolbox function\n');
-else
-    % Inline type-II DCT matching SPM's spm_drift.m exactly:
-    %   C(i,j) = sqrt(2/N) * cos(pi*(2i-1)*(j-1)/(2N)), i=1..N, j=1..n_basis
-    %   C(:,1) /= sqrt(2)   (DC normalisation)
-    i_vec = (1:N)';
-    j_vec = 1:n_basis;
-    C     = sqrt(2/N) * cos(pi * (2*i_vec - 1) .* (j_vec - 1) / (2*N));
-    C(:,1) = C(:,1) / sqrt(2);
-    fprintf('spm_drift: SPM not found, using inline DCT formula\n');
-end
+% Inline copy of THIS PROJECT's spm_drift.m (prf_models/spm_drift.m), not
+% generic SPM12's own spm_drift.m of the same name. The two differ: this
+% project's non-DC columns carry an extra *10 ("scaled pretty arbitrarily by
+% sqrt(2/N)*10", per that file's own comment), which SPM12's canonical
+% function does not apply. Calling whichever "spm_drift" happens to be on
+% the MATLAB path (e.g. after addpath('/path/to/spm12')) risked silently
+% picking up SPM12's un-scaled version instead, which would export a drift
+% matrix 10x too small in its non-DC columns relative to the Python port
+% (which deliberately reproduces the *10 project convention) -- an
+% inconsistency that would look like a Python bug in fig1_deterministic.png
+% but was actually just this script computing the wrong reference.
+%
+% Note: the real spm_drift.m also has a trailing
+% "vectOnes(2)=1; vectOnes(3)=1; C = C*diag(vectOnes)" step, but vectOnes
+% starts as ones(1,K), so that step is a no-op as written -- omitted here.
+i_vec = (1:N)';
+k_vec = 2:n_basis;              % MATLAB column index k, matching the
+                                 % original's "for k = 2:K" loop exactly
+C = zeros(N, n_basis);
+C(:, 1) = 1 / sqrt(N);
+C(:, 2:end) = sqrt(2 / N) * 10 * cos(pi * (2 * i_vec - 1) .* (k_vec - 1) / (2 * N));
 
 writematrix(C, fullfile(outdir, 'spm_drift.csv'));
 fprintf('Saved spm_drift.csv  shape: %dx%d\n', size(C,1), size(C,2));
@@ -97,7 +102,7 @@ writetable(params, fullfile(outdir, 'params.csv'));
 fprintf('Saved params.csv\n');
 
 % ─── summary ─────────────────────────────────────────────────────────────────
-fprintf('\nColumn norms of spm_drift (should all be 1.0):\n');
+fprintf('\nColumn norms of spm_drift (should be [1, 10, 10, ...], project convention):\n');
 disp(sqrt(sum(C.^2)));
 
 fprintf('\nDrift signal range: [%.6f, %.6f]\n', min(drift_signal), max(drift_signal));
