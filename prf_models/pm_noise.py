@@ -1,11 +1,12 @@
 """BOLD fMRI noise model, ported from gari_pmNoise.m (vistasoft/gari toolbox).
 
 The noise has zero mean. Amplitude parameters (white_amplitude, etc.) are
-calibrated against a reference BOLD signal with std == REFERENCE_BOLD_STD
-(3% PSC): ``apply_bold_noise()`` scales the generated noise by
+calibrated against a reference BOLD signal with std == REFERENCE_BOLD_STD:
+``apply_bold_noise()`` scales the generated noise by
 ``np.std(bold) / REFERENCE_BOLD_STD``, so the 'low'/'mid'/'high' voxel presets
 reproduce the SNR levels reported in the prf-Synthesize validation figure
-(Lerma-Usabiaga et al.) regardless of the absolute scale of ``bold``. Four
+(Lerma-Usabiaga et al., Fig 4) regardless of the absolute scale of ``bold``.
+See REFERENCE_BOLD_STD's docstring for how its value was derived. Four
 noise components are supported: white noise, cardiac oscillation, respiratory
 oscillation, and low-frequency drift (DCT basis, matching SPM's spm_drift).
 
@@ -90,7 +91,7 @@ def spm_drift(n_timepoints: int, n_basis: int) -> np.ndarray:
 
 _VOXEL_DEFAULTS = {
     'mid': dict(
-        white_amplitude=0.032,
+        white_amplitude=0.032, # White noise constant to relate to random number generator (?)
         cardiac_amplitude=0.01,  cardiac_frequency=1.05,
         respiratory_amplitude=0.01, respiratory_frequency=0.3,
         lowfrequ_amplitude=0.01,  lowfrequ_frequ=120.0,
@@ -115,11 +116,31 @@ _VOXEL_ALIASES = {
     'bad': 'high', 'high': 'high', 'highnoise': 'high',
 }
 
-# BOLD-signal std (as a fraction, i.e. 3% PSC) that the voxel preset amplitudes
-# above are calibrated against. apply_bold_noise() rescales the generated
-# noise so that np.std(bold) == REFERENCE_BOLD_STD reproduces the published
-# SNRs (low=5.29dB, mid=-0.51dB, high=-4.29dB; Lerma-Usabiaga et al. Fig 4).
-REFERENCE_BOLD_STD = 0.03
+# BOLD-signal std (as a fraction, e.g. 0.032 == 3.2% PSC) that the voxel
+# preset amplitudes above are calibrated against. apply_bold_noise() rescales
+# the generated noise so that np.std(bold) == REFERENCE_BOLD_STD reproduces
+# the published SNRs (low=5.29dB, mid=-0.51dB, high=-4.29dB;
+# Lerma-Usabiaga et al. Fig 4).
+#
+# Derivation
+# ----------
+# The paper's Methods describe selecting real-data calibration voxels with
+# "signal percent change between 8% and 12%" (peak-to-peak contrast), which
+# these SNR targets were in turn set from. For a pure sinusoid of
+# peak-to-peak contrast C, amplitude A = C/2 and std = A/sqrt(2), so the
+# midpoint of that range (C=10%) implies std = 5%/sqrt(2) = 3.54% -- a
+# textual estimate, not an exact value (the paper does not state the
+# conversion from contrast to std explicitly).
+#
+# That estimate was cross-checked numerically: tests/test_pm_noise.py Test 48
+# reproduces Fig 4's SNRs using the paper's own metric (ratio of an 8-cycle
+# harmonic fit to its residual, at TR=1.5s/24s-period/8-cycles), then a 1-D
+# search (scipy.optimize.minimize_scalar, common random numbers across
+# candidates) solves for the REFERENCE_BOLD_STD minimizing squared error to
+# all three targets simultaneously. That search converged to 0.0323,
+# consistent with (and more precise than) the 0.0354 textual estimate above,
+# and is the value used here.
+REFERENCE_BOLD_STD = 0.0323
 
 
 # ---------------------------------------------------------------------------
