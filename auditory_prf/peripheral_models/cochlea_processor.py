@@ -13,11 +13,9 @@ from cochlea.zilany2014 import run_zilany2014
 from cochlea.zilany2014 import run_zilany2014_rate
 
 
-import thorns as th
-import thorns.waves as wv
-
 from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
 from auditory_prf.utils.calculate_population_rate import calculate_population_rate
+from auditory_prf.utils.thorns_compat import trains_to_array
 
 
 logger = logging.getLogger(__name__)
@@ -106,7 +104,7 @@ class CochleaProcessor:
     def _convert_to_array(self, trains: pd.DataFrame) -> tuple:
         """Convert spike trains DataFrame to array format."""
 
-        spike_array = th.trains_to_array(trains, self.config.peripheral_fs).T
+        spike_array = trains_to_array(trains, self.config.peripheral_fs).T
         cf_list = trains['cf'].unique()
         duration = trains.iloc[0]['duration']
         return spike_array, cf_list, duration

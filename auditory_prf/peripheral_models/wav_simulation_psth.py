@@ -11,13 +11,13 @@ from pathlib import Path
 import time
 from typing import Dict
 import soundfile as sf
-import thorns.waves as wv
 
 
 # Project-level imports
 from auditory_prf.utils.timestamp_utils import generate_timestamp
 from auditory_prf.utils.calculate_population_rate import calculate_population_rate
 from auditory_prf.utils.stimulus_utils import ensure_mono
+from auditory_prf.utils.thorns_compat import resample
 from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
 from auditory_prf.peripheral_models.simulation_base import _SimulationBase
 
@@ -145,7 +145,7 @@ class CochleaWavSimulation(_SimulationBase):
 
             if fs != self.config.peripheral_fs:
                 logger.info(f"Resampling from {fs} Hz to {self.config.peripheral_fs} Hz")
-                audio = wv.resample(audio, fs, self.config.peripheral_fs)
+                audio = resample(audio, fs, self.config.peripheral_fs)
 
             # Get metadata
             metadata = self.metadata_dict.get(identifier, {})

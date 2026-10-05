@@ -2,8 +2,9 @@
 # Created by: Ekim Celikay
 
 import numpy as np
-import thorns
 from scipy.signal import firwin, filtfilt
+
+from auditory_prf.utils.thorns_compat import set_dbspl
 
 
 
@@ -51,7 +52,7 @@ class SoundGen:
             sound = sound + amplitude * harmonic
 
         # Normalize to desired dbspl level
-        normalized_sound = thorns.waves.set_dbspl(sound, dbspl)
+        normalized_sound = set_dbspl(sound, dbspl)
         # found this value in simulation,`maxamp_simulation.py`
         max_amplitude = 0.2753
         normalized_sound = normalized_sound / (max_amplitude + 0.01)
@@ -87,8 +88,7 @@ class SoundGen:
         # apply zero-phase FIR filter (no delay)
         filtered_noise = filtfilt(fir_coeffs, [1.0], noise)
 
-        # set to desired dbspl using thorns
-        normalized_noise = thorns.waves.set_dbspl(filtered_noise, dbspl)
+        normalized_noise = set_dbspl(filtered_noise, dbspl)
         return normalized_noise
 
     def generate_multiple_band_limited_noises(self,
@@ -127,7 +127,7 @@ class SoundGen:
             np.random.seed(seed)
             white_noise = np.random.normal(0, 1, n_samples)
             filtered = filtfilt(fir_coeffs, [1.0], white_noise)
-            scaled = thorns.waves.set_dbspl(filtered, dbspl)
+            scaled = set_dbspl(filtered, dbspl)
             stimuli.append(scaled)
 
         return stimuli
