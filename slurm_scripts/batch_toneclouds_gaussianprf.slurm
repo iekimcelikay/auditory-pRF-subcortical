@@ -37,8 +37,7 @@ cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python -c "import sys; print(sys.executable)"
 conda run -n strf3.9 python $AUDITORY_PRF_ROOT/examples/cochlea_toneclouds_gaussianprf.py \
     --wav-index $SLURM_ARRAY_TASK_ID \
-    --wav-dir /scratch/ecelikay/workspace/auditory-pRF-subcortical/stimuli/produced/toneclouds_gaussianprf_20260619_0114
-
+    --wav-dir /scratch/ecelikay/workspace/auditory-pRF-subcortical/stimuli/produced/toneclouds_gaussianprf_20261005_1741
 # End of job
 echo "==================================="
 echo "Job finished at $(date)"
