@@ -30,7 +30,12 @@ module load Miniforge3
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 cd $AUDITORY_PRF_ROOT
 
-conda run -n strf3.9 python -m auditory_prf.prf_pipeline.solver.grid_recovery_parallel_workers
+# --no-capture-output matters for live progress monitoring: plain
+# `conda run` withholds the child process's stdout until it exits, which
+# would otherwise make this job's .out log look frozen for the whole
+# candidate-grid build even though it's actively running -- per project
+# discussion.
+conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.grid_recovery_parallel_workers
 
 echo "==================================="
 echo "Job finished at $(date)"

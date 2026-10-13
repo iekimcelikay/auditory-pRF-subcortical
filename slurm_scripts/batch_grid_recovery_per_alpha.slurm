@@ -35,7 +35,12 @@ cd $AUDITORY_PRF_ROOT
 
 # NOTE: if solver/ was added to this checkout after strf3.9's last editable
 # install, rerun: conda run -n strf3.9 pip install -e .
-conda run -n strf3.9 python -m auditory_prf.prf_pipeline.solver.grid_recovery_parallel_per_alpha
+# --no-capture-output matters for live progress monitoring: plain
+# `conda run` withholds the child process's stdout until it exits, which
+# would otherwise make this job's .out log look frozen for the whole
+# candidate-grid build even though it's actively running -- per project
+# discussion.
+conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.grid_recovery_parallel_per_alpha
 
 echo "==================================="
 echo "Job finished at $(date)"

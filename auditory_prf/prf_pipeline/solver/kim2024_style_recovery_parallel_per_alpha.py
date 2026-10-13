@@ -1,17 +1,22 @@
 """kim2024_style_recovery_parallel_per_alpha.py
 =================================================
-Same Kim-et-al.-2024-style recovery procedure as ``kim2024_style_recovery.py``
-(independent randomly-sampled voxels, one noisy draw each, post-hoc Pearson r
-accuracy reporting — see that module's docstring for the full rationale) —
-this variant parallelizes the candidate-grid build for dIPC, by reusing
-``grid_recovery_parallel_per_alpha.py``'s ``build_candidate_grid_per_alpha``
-directly rather than re-implementing it: the AdapTrans candidate grid
-(cf_index x tau_on x tau_off x alpha x w) is identical between the two
-recovery scripts, only what happens AFTER the grid is built differs (Monte
-Carlo repeats + argmax vs. one draw + argmax per independent voxel), so this
-is the one piece safe to share instead of duplicating (see that module's
-docstring for the per-alpha-pool memory-bounding rationale — fixed 16-core/
-32GB dIPC nodes).
+Same Kim-et-al.-2024-inspired recovery procedure as
+``kim2024_style_recovery.py`` (independent randomly-sampled voxels, Monte
+Carlo noise repeats per voxel, post-hoc Pearson r accuracy reporting, single
+shared ``tau_ms`` instead of separate ``tau_on_ms``/``tau_off_ms`` — see that
+module's docstring for the full rationale) — this variant parallelizes the
+candidate-grid build for dIPC.
+
+Unlike an earlier version of this script, this candidate grid is NOT shared
+with ``grid_recovery_parallel_per_alpha.py``'s ``build_candidate_grid_per_alpha``
+— that builder loops over separate ``tau_on``/``tau_off`` grids and produces
+5-column ``candidate_params``; once tau_on/tau_off were unified into one
+``tau_ms`` parameter (per project discussion), the two candidate grids
+genuinely diverged (4 columns, one fewer free dimension, ``tau_ms`` grid
+shared for both ON and OFF), so this module has its own per-alpha-pool
+builder below (same memory-bounding rationale — fixed 16-core/32GB dIPC
+nodes — see ``grid_recovery_parallel_per_alpha.py``'s module docstring for
+why a fresh ``Pool`` opens per alpha).
 
 Usage (from project root, request multiple CPUs via SLURM — see
 slurm_scripts/batch_kim2024_style_recovery_per_alpha.slurm):
@@ -24,6 +29,10 @@ whole candidate-grid build.)
 """
 
 import os
+import time
+from multiprocessing import Pool
+
+import numpy as np
 
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import generate_run_design
@@ -41,41 +50,144 @@ from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import 
     CLOSING_BLANK_S,
     ITI_RANGE_S,
 )
-from auditory_prf.prf_pipeline.solver.forward_model import load_raw_sequences
+from auditory_prf.prf_pipeline.solver.forward_model import (
+    load_raw_sequences,
+    sharpen_all_sequences,
+    build_per_seq_trains,
+    forward_bold_runs,
+)
 from auditory_prf.prf_pipeline.solver.grid_recovery import (
     RESULTS_DIR,
     TR_S,
     TOTAL_RUN_DUR_S,
     SIGNAL_DT_S,
+    RECTIFY,
+    RHO,
+    CHUNK_MARGIN_MS,
     N_RUNS_RECOVERY,
     N_DESIGN_SEEDS,
     DESIGN_SEEDS,
     NOISE_VOXELS,
     MC_SEED,
-    PARAM_NAMES,
-    sample_ground_truths_off_grid,
-    plot_recovery,
-    save_recovery_table,
-    plot_noise_comparison,
-)
-from auditory_prf.prf_pipeline.solver.grid_recovery_parallel_per_alpha import (
-    N_WORKERS,
-    build_candidate_grid_per_alpha,
+    ALPHA_GRID,
+    W_GRID,
 )
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     N_VOXELS,
+    TAU_GRID_MS,
+    PARAM_NAMES,
     RUN_DIR,
     candidate_grid_path,
     recovery_output_paths,
     noise_comparison_plot_path,
     accuracy_table_path,
     accuracy_comparison_plot_path,
-    run_recovery_single_draw,
+    sample_ground_truths_off_grid,
+    run_recovery,
     compute_accuracy_correlations,
     save_accuracy_table,
     plot_accuracy_comparison,
+    plot_recovery,
+    save_recovery_table,
+    plot_noise_comparison,
 )
-import numpy as np
+
+# Number of worker processes for the candidate-grid build. Defaults to the
+# SLURM-allocated CPU count when run under a SLURM job, else all local cores.
+N_WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+
+# ── Worker-process globals (populated once per worker, per-alpha pool) ──────
+_worker: dict = {}
+
+
+def _init_worker(raw_sequences: dict, sharpened_by_seq: dict, cf_list_hz: np.ndarray,
+                  run_designs: list, hrf_kernel: np.ndarray) -> None:
+    """Pool initializer for ONE alpha's pool — sharpened data for that alpha only."""
+    _worker["raw_sequences"] = raw_sequences
+    _worker["sharpened_by_seq"] = sharpened_by_seq
+    _worker["cf_list_hz"] = cf_list_hz
+    _worker["run_designs"] = run_designs
+    _worker["hrf_kernel"] = hrf_kernel
+    _worker["per_seq_cache"] = {}   # cf_index -> (per_seq, cf_hz); bounded by n_cf
+
+
+def _build_one_candidate(params: tuple) -> np.ndarray:
+    """Worker task: forward-simulate one (cf_index, tau_ms, w) candidate for this alpha."""
+    cf_index, tau_ms, w = params
+    cf_index = int(cf_index)
+
+    per_seq_cache = _worker["per_seq_cache"]
+    if cf_index not in per_seq_cache:
+        per_seq_cache[cf_index] = build_per_seq_trains(
+            _worker["raw_sequences"], _worker["sharpened_by_seq"], cf_index, _worker["cf_list_hz"],
+            TC_SILENCE_SEQ_ID, chunk_margin_ms=CHUNK_MARGIN_MS,
+        )
+    per_seq, cf_hz = per_seq_cache[cf_index]
+
+    bold_per_run = forward_bold_runs(
+        per_seq, _worker["run_designs"], _worker["hrf_kernel"], cf_hz,
+        TOTAL_RUN_DUR_S, TR_S, SIGNAL_DT_S, w, tau_ms, tau_ms, RECTIFY, RHO,
+    )
+    return np.concatenate(bold_per_run).astype(np.float32)
+
+
+def build_candidate_grid_per_alpha(
+    raw_sequences: dict,
+    cf_list_hz: np.ndarray,
+    run_designs: list,
+    hrf_kernel: np.ndarray,
+    n_workers: int = N_WORKERS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-alpha-pool parallel version of ``kim2024_style_recovery.build_candidate_grid``.
+
+    Returns
+    -------
+    candidate_params : np.ndarray, shape (n_candidates, 4)
+    template_matrix_norm : np.ndarray, shape (n_candidates, n_timepoints)
+    """
+    n_cf = len(cf_list_hz)
+    n_candidates = n_cf * len(TAU_GRID_MS) * len(ALPHA_GRID) * len(W_GRID)
+    print(f"Building candidate grid with {n_workers} worker processes (fresh pool per alpha): "
+          f"{n_cf} CF x {len(TAU_GRID_MS)} tau x {len(ALPHA_GRID)} alpha x "
+          f"{len(W_GRID)} w = {n_candidates:,} candidates")
+
+    candidate_params = np.empty((n_candidates, 4), dtype=float)
+    template_matrix = None
+    chunk_size = len(TAU_GRID_MS) * len(W_GRID)   # one cf_index's worth
+    idx = 0
+    t_start = time.time()
+
+    for alpha in ALPHA_GRID:
+        sharpened_by_seq = sharpen_all_sequences(raw_sequences, alpha)
+
+        candidate_param_list = [
+            (cf_index, tau_ms, w)
+            for cf_index in range(n_cf)
+            for tau_ms in TAU_GRID_MS
+            for w in W_GRID
+        ]
+
+        with Pool(processes=n_workers, initializer=_init_worker,
+                  initargs=(raw_sequences, sharpened_by_seq, cf_list_hz, run_designs, hrf_kernel)) as pool:
+            for local_i, template in enumerate(
+                pool.imap(_build_one_candidate, candidate_param_list, chunksize=chunk_size)
+            ):
+                if template_matrix is None:
+                    template_matrix = np.empty((n_candidates, len(template)), dtype=np.float32)
+                cf_index, tau_ms, w = candidate_param_list[local_i]
+                template_matrix[idx, :] = template
+                candidate_params[idx] = (cf_index, tau_ms, alpha, w)
+                idx += 1
+
+        elapsed = time.time() - t_start
+        print(f"  alpha={alpha:.3f} done ({idx:,}/{n_candidates:,} candidates, "
+              f"{elapsed:.0f}s elapsed)")
+
+    template_matrix -= template_matrix.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(template_matrix, axis=1, keepdims=True)
+    template_matrix /= np.where(norms == 0, 1.0, norms)
+
+    return candidate_params, template_matrix
 
 
 def main() -> None:
@@ -145,15 +257,14 @@ def main() -> None:
         accuracy_by_noise = {}
         for noise_voxel in NOISE_VOXELS:
             print(f"\nRunning Kim-et-al.-style recovery at design_seed={design_seed}, "
-                  f"noise_voxel='{noise_voxel}': {N_VOXELS} independent voxels, "
-                  f"one noisy draw each ...")
-            recovered_params = run_recovery_single_draw(
+                  f"noise_voxel='{noise_voxel}': {N_VOXELS} independent voxels, MC repeats each ...")
+            recovered_params = run_recovery(
                 raw_sequences, cf_list_hz, run_designs, hrf_kernel,
                 candidate_params, template_matrix_norm, true_params, noise_voxel,
             )
             recovered_by_noise[noise_voxel] = recovered_params
             accuracy_by_noise[noise_voxel] = compute_accuracy_correlations(true_params, recovered_params)
-            print(f"  Accuracy (true vs. recovered Pearson r): "
+            print(f"  Accuracy (true vs. per-voxel mean recovered Pearson r): "
                   f"{ {k: round(v, 3) for k, v in accuracy_by_noise[noise_voxel].items()} }")
 
             intermediate_path, scatter_plot_path, recovery_table_path = recovery_output_paths(
@@ -161,13 +272,11 @@ def main() -> None:
             np.savez(intermediate_path, true_params=true_params, recovered_params=recovered_params,
                      param_names=PARAM_NAMES)
             print(f"Recovery results saved -> {intermediate_path.resolve()}")
+            plot_recovery(true_params, recovered_params, scatter_plot_path, param_names=PARAM_NAMES)
+            save_recovery_table(true_params, recovered_params, recovery_table_path, param_names=PARAM_NAMES)
 
-            recovered_3d = recovered_params[:, None, :]
-            plot_recovery(true_params, recovered_3d, scatter_plot_path)
-            save_recovery_table(true_params, recovered_3d, recovery_table_path)
-
-        recovered_by_noise_3d = {k: v[:, None, :] for k, v in recovered_by_noise.items()}
-        plot_noise_comparison(true_params, recovered_by_noise_3d, noise_comparison_plot_path(design_seed))
+        plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(design_seed),
+                               param_names=PARAM_NAMES)
         save_accuracy_table(accuracy_by_noise, accuracy_table_path(design_seed))
         plot_accuracy_comparison(accuracy_by_noise, accuracy_comparison_plot_path(design_seed))
 
