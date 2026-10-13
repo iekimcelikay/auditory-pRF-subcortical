@@ -69,6 +69,7 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     DESIGN_SEEDS,
     NOISE_VOXELS,
     MC_SEED,
+    N_NOISE_REPEATS,
     ALPHA_GRID,
     W_GRID,
 )
@@ -278,7 +279,8 @@ def main() -> None:
         plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(design_seed),
                                param_names=PARAM_NAMES)
         save_accuracy_table(accuracy_by_noise, accuracy_table_path(design_seed))
-        plot_accuracy_comparison(accuracy_by_noise, accuracy_comparison_plot_path(design_seed))
+        plot_accuracy_comparison(accuracy_by_noise, accuracy_comparison_plot_path(design_seed),
+                                  n_voxels=N_VOXELS, n_repeats=N_NOISE_REPEATS)
 
 
 if __name__ == "__main__":

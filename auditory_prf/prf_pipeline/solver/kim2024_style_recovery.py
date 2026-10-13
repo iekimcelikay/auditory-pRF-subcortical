@@ -332,11 +332,19 @@ def save_accuracy_table(accuracy_by_noise: dict, save_path: Path, param_names: l
     print(f"Accuracy-correlation table saved -> {save_path.resolve()}")
 
 
-def plot_accuracy_comparison(accuracy_by_noise: dict, save_path: Path, param_names: list = PARAM_NAMES) -> None:
+def plot_accuracy_comparison(accuracy_by_noise: dict, save_path: Path, param_names: list = PARAM_NAMES,
+                              n_voxels: int = N_VOXELS, n_repeats: int = N_NOISE_REPEATS) -> None:
     """Bar chart of the post-hoc accuracy statistic: one group per parameter,
     one bar per noise level, height = Pearson r between true values and
-    per-voxel mean recovered values across all ``N_VOXELS`` independent
-    voxels (Fig. 4E style)."""
+    per-voxel mean recovered values across all independent voxels (Fig. 4E
+    style).
+
+    ``n_voxels``/``n_repeats`` are for the title only — pass them explicitly
+    rather than relying on this module's own ``N_VOXELS``/``N_NOISE_REPEATS``
+    defaults when called from a different script with its own counts (e.g.
+    kim2024_style_duration_recovery.py) — otherwise the title would silently
+    show THIS module's values instead of the caller's.
+    """
     level_colors = {"low": "forestgreen", "mid": "darkorange", "high": "firebrick"}
     noise_levels = list(accuracy_by_noise.keys())
     n_params = len(param_names)
@@ -355,8 +363,8 @@ def plot_accuracy_comparison(accuracy_by_noise: dict, save_path: Path, param_nam
     ax.set_ylim(-1.05, 1.05)
     ax.axhline(0, color="black", linewidth=0.8, zorder=0)
     ax.legend(title="noise level")
-    ax.set_title(f"Recovery accuracy across noise levels (N={N_VOXELS} voxels, "
-                 f"{N_NOISE_REPEATS:,} MC repeats each)")
+    ax.set_title(f"Recovery accuracy across noise levels (N={n_voxels} voxels, "
+                 f"{n_repeats:,} MC repeats each)")
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -452,7 +460,8 @@ def main() -> None:
         plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(design_seed),
                                param_names=PARAM_NAMES)
         save_accuracy_table(accuracy_by_noise, accuracy_table_path(design_seed))
-        plot_accuracy_comparison(accuracy_by_noise, accuracy_comparison_plot_path(design_seed))
+        plot_accuracy_comparison(accuracy_by_noise, accuracy_comparison_plot_path(design_seed),
+                                  n_voxels=N_VOXELS, n_repeats=N_NOISE_REPEATS)
 
 
 if __name__ == "__main__":
