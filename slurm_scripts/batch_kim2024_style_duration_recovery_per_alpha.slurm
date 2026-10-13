@@ -4,7 +4,7 @@
 #SBATCH --job-name=kim2024_style_duration_recovery_per_alpha
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_per_alpha_%j.out
@@ -23,6 +23,16 @@
 # kim2024_style_duration_recovery_parallel_per_alpha.py /
 # duration_recovery_parallel_per_alpha.py: N_WORKERS defaults to
 # $SLURM_CPUS_PER_TASK).
+#
+# Lowered from 16 to 8 -- a real run (job 7674151) silently stalled on the
+# 7th/last alpha pool with zero surviving worker processes (likely OOM-killed
+# -- this worker does no per-candidate caching, so peak memory scales
+# directly with concurrent worker count, unlike the AdapTrans version).
+# multiprocessing.Pool hangs forever rather than raising when workers die
+# unexpectedly, so the job showed as RUNNING in squeue with no progress.
+# Fewer concurrent workers reduces peak memory pressure; since there's no
+# per-worker caching benefit to lose here, this costs roughly 2x wall-clock
+# for the grid build, not a steep tradeoff.
 
 echo "==================================="
 echo "Job started at $(date)"
