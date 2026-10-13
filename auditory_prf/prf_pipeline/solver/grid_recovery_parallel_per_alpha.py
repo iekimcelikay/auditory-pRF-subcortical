@@ -63,7 +63,7 @@ from auditory_prf.prf_pipeline.solver.forward_model import (
 from auditory_prf.prf_pipeline.solver.grid_recovery import (
     RESULTS_DIR,
     RUN_DIR,
-    CANDIDATE_GRID_PATH,
+    candidate_grid_path,
     noise_comparison_plot_path,
     recovery_output_paths,
     TR_S,
@@ -73,6 +73,8 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     RHO,
     CHUNK_MARGIN_MS,
     N_RUNS_RECOVERY,
+    N_DESIGN_SEEDS,
+    DESIGN_SEEDS,
     TAU_ON_GRID_MS,
     TAU_OFF_GRID_MS,
     ALPHA_GRID,
@@ -226,57 +228,63 @@ def main() -> None:
 
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
 
-    run_design_seeds = [1000 + int(s) for s in
-                        np.random.default_rng().integers(0, 100_000, size=N_RUNS_RECOVERY)]
-    print(f"  Run-design seeds: {run_design_seeds}")
-    run_designs = [
-        generate_run_design(
-            base_trials, seq_id_fn,
-            trial_duration_s=TRIAL_DURATION_S,
-            opening_blank_s=OPENING_BLANK_S,
-            iti_range_s=ITI_RANGE_S,
-            seed=seed,
-        )
-        for seed in run_design_seeds
-    ]
-    for run_idx, design in enumerate(run_designs):
-        last_onset_s = design[-1][1]
-        derived_run_dur_s = last_onset_s + TRIAL_DURATION_S + CLOSING_BLANK_S
-        assert np.isclose(derived_run_dur_s, TOTAL_RUN_DUR_S), (
-            f"Run {run_idx}: derived run length {derived_run_dur_s:.3f}s != "
-            f"TOTAL_RUN_DUR_S={TOTAL_RUN_DUR_S}s."
-        )
+    print(f"\nSweeping {N_DESIGN_SEEDS} design seeds: {DESIGN_SEEDS}")
+    for design_seed in DESIGN_SEEDS:
+        print(f"\n######## Design seed {design_seed} ########")
 
-    candidate_params, template_matrix_norm = build_candidate_grid_per_alpha(
-        raw_sequences, cf_list_hz, run_designs, hrf_kernel, n_workers=N_WORKERS,
-    )
-    np.savez(CANDIDATE_GRID_PATH,
-             candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
-    print(f"Candidate grid saved -> {CANDIDATE_GRID_PATH.resolve()}")
-
-    for gt_mode in GT_SAMPLING_MODES:
-        print(f"\n=== GT sampling mode: '{gt_mode}' ===")
-        gt_rng = np.random.default_rng(MC_SEED)
-        true_params = sample_ground_truths(gt_rng, n_cf, N_GT_COMBOS, gt_mode)
-
-        recovered_by_noise = {}
-        for noise_voxel in NOISE_VOXELS:
-            print(f"\nRunning recovery at gt_mode='{gt_mode}', noise_voxel='{noise_voxel}': "
-                  f"{N_GT_COMBOS} ground-truth combos x {N_NOISE_REPEATS:,} noise repeats each ...")
-            recovered_params = run_recovery(
-                raw_sequences, cf_list_hz, run_designs, hrf_kernel,
-                candidate_params, template_matrix_norm, true_params, noise_voxel,
+        run_design_seeds = [1000 + int(s) for s in
+                            np.random.default_rng(design_seed).integers(0, 100_000, size=N_RUNS_RECOVERY)]
+        print(f"  Run-design seeds: {run_design_seeds}")
+        run_designs = [
+            generate_run_design(
+                base_trials, seq_id_fn,
+                trial_duration_s=TRIAL_DURATION_S,
+                opening_blank_s=OPENING_BLANK_S,
+                iti_range_s=ITI_RANGE_S,
+                seed=seed,
             )
-            recovered_by_noise[noise_voxel] = recovered_params
+            for seed in run_design_seeds
+        ]
+        for run_idx, design in enumerate(run_designs):
+            last_onset_s = design[-1][1]
+            derived_run_dur_s = last_onset_s + TRIAL_DURATION_S + CLOSING_BLANK_S
+            assert np.isclose(derived_run_dur_s, TOTAL_RUN_DUR_S), (
+                f"Run {run_idx}: derived run length {derived_run_dur_s:.3f}s != "
+                f"TOTAL_RUN_DUR_S={TOTAL_RUN_DUR_S}s."
+            )
 
-            intermediate_path, scatter_plot_path, recovery_table_path = recovery_output_paths(gt_mode, noise_voxel)
-            np.savez(intermediate_path, true_params=true_params, recovered_params=recovered_params,
-                     param_names=PARAM_NAMES)
-            print(f"Recovery results saved -> {intermediate_path.resolve()}")
-            plot_recovery(true_params, recovered_params, scatter_plot_path)
-            save_recovery_table(true_params, recovered_params, recovery_table_path)
+        candidate_params, template_matrix_norm = build_candidate_grid_per_alpha(
+            raw_sequences, cf_list_hz, run_designs, hrf_kernel, n_workers=N_WORKERS,
+        )
+        cgp = candidate_grid_path(design_seed)
+        np.savez(cgp, candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
+        print(f"Candidate grid saved -> {cgp.resolve()}")
 
-        plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(gt_mode))
+        for gt_mode in GT_SAMPLING_MODES:
+            print(f"\n=== design_seed={design_seed}, GT sampling mode: '{gt_mode}' ===")
+            gt_rng = np.random.default_rng(MC_SEED)
+            true_params = sample_ground_truths(gt_rng, n_cf, N_GT_COMBOS, gt_mode)
+
+            recovered_by_noise = {}
+            for noise_voxel in NOISE_VOXELS:
+                print(f"\nRunning recovery at design_seed={design_seed}, gt_mode='{gt_mode}', "
+                      f"noise_voxel='{noise_voxel}': {N_GT_COMBOS} ground-truth combos x "
+                      f"{N_NOISE_REPEATS:,} noise repeats each ...")
+                recovered_params = run_recovery(
+                    raw_sequences, cf_list_hz, run_designs, hrf_kernel,
+                    candidate_params, template_matrix_norm, true_params, noise_voxel,
+                )
+                recovered_by_noise[noise_voxel] = recovered_params
+
+                intermediate_path, scatter_plot_path, recovery_table_path = recovery_output_paths(
+                    design_seed, gt_mode, noise_voxel)
+                np.savez(intermediate_path, true_params=true_params, recovered_params=recovered_params,
+                         param_names=PARAM_NAMES)
+                print(f"Recovery results saved -> {intermediate_path.resolve()}")
+                plot_recovery(true_params, recovered_params, scatter_plot_path)
+                save_recovery_table(true_params, recovered_params, recovery_table_path)
+
+            plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(design_seed, gt_mode))
 
 
 if __name__ == "__main__":

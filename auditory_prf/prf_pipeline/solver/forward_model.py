@@ -9,8 +9,14 @@ of the same stage sequence (as ``tau_recovery_sanity_check.py`` currently
 does).
 
 Stage order (see CLAUDE.md): load cochlear PSTH -> power-law sharpening
-(alpha) -> chunk into tone-ON windows -> boxcar train -> AdapTrans ON/OFF
+(alpha) -> chunk into tone-ON windows -> (optional) Gaussian duration filter
+(pref_dur_ms / sigma_dur_ms) -> boxcar train -> (optional) AdapTrans ON/OFF
 (tau_on_ms / tau_off_ms, adaptation weight w) -> HRF convolution -> BOLD.
+AdapTrans and the duration filter are independent toggles (``build_per_seq_trains``'s
+``pref_dur_ms=None`` skips duration weighting; ``forward_bold_runs``'s
+``apply_adaptrans_flag=False`` skips AdapTrans) — e.g. to test duration-model
+recovery in isolation, per project discussion, before testing it combined
+with AdapTrans.
 
 Caching contract (why functions are split this way)
 ----------------------------------------------------
@@ -37,6 +43,7 @@ import numpy as np
 from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_population_psth
 from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
+from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_scalar
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
 from auditory_prf.prf_pipeline.run_assembly import assemble_run_bold
 from auditory_prf.utils.result_saver import ResultSaver
@@ -113,6 +120,8 @@ def build_per_seq_trains(
     cf_list_hz: np.ndarray,
     silence_seq_id: str,
     chunk_margin_ms: float = 30.0,
+    pref_dur_ms: Optional[float] = None,
+    sigma_dur_ms: float = 50.0,
 ) -> tuple[dict, float]:
     """Build the boxcar-train ``per_seq`` dict for one (alpha, cf_index) pair.
 
@@ -131,6 +140,15 @@ def build_per_seq_trains(
         at its mean rate rather than chunked (it has no tone-ON windows).
     chunk_margin_ms : float
         Extra window after tone offset passed to ``chunk_from_id`` (ms).
+    pref_dur_ms : float or None
+        Preferred duration (tau0) for the Gaussian duration-tuning filter —
+        a parameter to fit, applied to each tone's mean rate before building
+        the boxcar train. ``None`` (default) skips the filter entirely,
+        i.e. amplitudes are the raw mean rates.
+    sigma_dur_ms : float
+        Duration-tuning width (sigma_tau0) — also a parameter to fit, with
+        equal standing to ``pref_dur_ms``; only has an effect when
+        ``pref_dur_ms`` is not None (the filter is off/on as a pair).
 
     Returns
     -------
@@ -152,11 +170,19 @@ def build_per_seq_trains(
         if seq_id == silence_seq_id:
             train = np.full(int(round(total_dur_ms)), float(np.mean(sharpened_row)))
         else:
-            result, _tone_dur_ms, _isi_ms = chunk_from_id(
+            result, tone_dur_ms, _isi_ms = chunk_from_id(
                 sharpened_row, time_axis_s, seq_id, margin_ms=chunk_margin_ms,
             )
+            mean_rates_on = [np.mean(chunk) for chunk in result["chunks"]]
+            if pref_dur_ms is not None:
+                amplitudes = [
+                    apply_duration_gaussian_scalar(m, tone_dur_ms, pref_dur_ms, sigma_dur_ms)
+                    for m in mean_rates_on
+                ]
+            else:
+                amplitudes = mean_rates_on
             train = build_prf_boxcar_train(
-                [np.mean(chunk) for chunk in result["chunks"]],
+                amplitudes,
                 result["onsets_ms"],
                 result["offsets_ms"],
                 total_dur_ms,
@@ -181,6 +207,7 @@ def forward_bold_runs(
     tau_off_ms: float,
     rectify: bool,
     rho: float,
+    apply_adaptrans_flag: bool = True,
 ) -> np.ndarray:
     """Forward-simulate clean BOLD for one parameter combination, all runs.
 
@@ -201,13 +228,22 @@ def forward_bold_runs(
     total_run_dur_s, tr_s, signal_dt_s : float
         Timing parameters, shared across runs.
     w : float
-        AdapTrans adaptation weight.
+        AdapTrans adaptation weight. Unused (pass anything) when
+        ``apply_adaptrans_flag=False`` — see ``assemble_run_bold``: ``w`` is
+        only ever read inside its ``if apply_adaptrans_flag:`` branch.
     tau_on_ms, tau_off_ms : float
-        AdapTrans ON/OFF filter time constants (ms).
+        AdapTrans ON/OFF filter time constants (ms). Same caveat as ``w``.
     rectify : bool
         Passed through to ``assemble_run_bold``.
     rho : float
-        ON-to-OFF BOLD weighting ratio.
+        ON-to-OFF BOLD weighting ratio. Becomes a no-op scale factor on
+        ``bold_on`` when ``apply_adaptrans_flag=False`` (``bold_off`` is all
+        zeros in that case), which Pearson-r-based recovery is invariant to.
+    apply_adaptrans_flag : bool
+        If False, skips AdapTrans entirely — the assembled boxcar train
+        (optionally duration-filtered, see ``build_per_seq_trains``) is used
+        directly as the neural signal, per project discussion (testing the
+        duration model in isolation before combining it with AdapTrans).
 
     Returns
     -------
@@ -228,7 +264,7 @@ def forward_bold_runs(
             signal_dt_s=signal_dt_s,
             w=w,
             K=None,
-            apply_adaptrans_flag=True,
+            apply_adaptrans_flag=apply_adaptrans_flag,
             rectify=rectify,
             rho=rho,
             tau_ms=tau_on_ms,

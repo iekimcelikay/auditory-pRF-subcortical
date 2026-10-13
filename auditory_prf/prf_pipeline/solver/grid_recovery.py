@@ -78,12 +78,17 @@ RESULTS_DIR       = Path("models_output/toneclouds_gaussianprf_20261005_1741")
 RUN_TIMESTAMP       = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR          = Path("grid_recovery_results")
 RUN_DIR             = OUTPUT_DIR / RUN_TIMESTAMP
-CANDIDATE_GRID_PATH = RUN_DIR / f"candidate_grid_{RUN_TIMESTAMP}.npz"           # mode/noise-independent, built once
 
 
-def recovery_output_paths(gt_mode: str, noise_voxel: str) -> tuple[Path, Path, Path]:
-    """Per-(GT-sampling-mode, noise-level) output paths — see GT_SAMPLING_MODES, NOISE_VOXELS."""
-    tag = f"{gt_mode}_{noise_voxel}_{RUN_TIMESTAMP}"
+def candidate_grid_path(design_seed: int) -> Path:
+    """Per-design-seed candidate grid — templates depend on run_designs, so each
+    design seed needs its own (mode/noise-independent within that design)."""
+    return RUN_DIR / f"candidate_grid_design{design_seed}_{RUN_TIMESTAMP}.npz"
+
+
+def recovery_output_paths(design_seed: int, gt_mode: str, noise_voxel: str) -> tuple[Path, Path, Path]:
+    """Per-(design-seed, GT-sampling-mode, noise-level) output paths."""
+    tag = f"design{design_seed}_{gt_mode}_{noise_voxel}_{RUN_TIMESTAMP}"
     return (
         RUN_DIR / f"grid_recovery_results_{tag}.npz",
         RUN_DIR / f"grid_recovery_scatter_{tag}.png",
@@ -91,9 +96,9 @@ def recovery_output_paths(gt_mode: str, noise_voxel: str) -> tuple[Path, Path, P
     )
 
 
-def noise_comparison_plot_path(gt_mode: str) -> Path:
-    """Path for the per-GT-mode noise-level comparison figure (see plot_noise_comparison)."""
-    return RUN_DIR / f"grid_recovery_noise_comparison_{gt_mode}_{RUN_TIMESTAMP}.png"
+def noise_comparison_plot_path(design_seed: int, gt_mode: str) -> Path:
+    """Path for the per-(design-seed, GT-mode) noise-level comparison figure."""
+    return RUN_DIR / f"grid_recovery_noise_comparison_design{design_seed}_{gt_mode}_{RUN_TIMESTAMP}.png"
 
 # ── Fixed run/timing parameters — reused verbatim from
 # full_pipeline_toneclouds_adaptrans_claude.py (the real toneclouds_gaussianprf
@@ -117,6 +122,19 @@ CHUNK_MARGIN_MS = 30.0     # matches full_pipeline_toneclouds_adaptrans_claude.p
 # conversation). Start at 1 run to keep the grid build tractable; adjustable —
 # planned to increase later to test recovery under different run-design scales.
 N_RUNS_RECOVERY = 1
+
+# Swept — repeats the ENTIRE recovery test (candidate grid + all GT modes x
+# noise levels) once per design seed, to check whether a finding (e.g. tau
+# recovery being poor) holds up across different random trial orderings
+# rather than being an artifact of one particular draw. Deterministic/
+# reproducible (not the "random each run" scheme used elsewhere), offset
+# into the same "distinct from the real pipeline's BASE_SEED=42" pool as
+# gt35_singlerun_worker.py's DESIGN_SEEDS. Expensive: each additional seed
+# rebuilds the full candidate grid from scratch (run_designs feed into every
+# candidate's forward simulation), so this multiplies candidate-grid-build
+# cost by N_DESIGN_SEEDS.
+N_DESIGN_SEEDS = 10
+DESIGN_SEEDS   = [1000 + i for i in range(N_DESIGN_SEEDS)]
 
 # ── Candidate grid (fitting side — stays noiseless) ─────────────────────────
 TAU_ON_GRID_MS  = [20, 30, 50, 75, 100, 150, 250, 300, 400]
@@ -339,14 +357,19 @@ def run_recovery(
     return recovered_params
 
 
-def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path) -> None:
+def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path,
+                   param_names: list = PARAM_NAMES) -> None:
     """Per-parameter recovery scatter: true (y) vs. recovered (x), unity line.
 
     Points are colored by ground-truth combo index, consistently across all
     panels — so a point's color identifies which combo (and therefore which
-    values of the *other* 4 parameters) it came from. Look those up in the
+    values of the other parameters) it came from. Look those up in the
     companion table (see ``save_recovery_table``) rather than guessing from
     the plot alone.
+
+    ``param_names`` defaults to this module's own 5-parameter list but is
+    overridable (e.g. by duration_recovery.py's 4-parameter set) — this
+    function makes no other assumption about parameter count.
     """
     n_gt_combos, n_repeats, n_params = recovered_params.shape
     # Continuous colormap sampled evenly across n_gt_combos, rather than a
@@ -360,7 +383,7 @@ def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_pa
 
     fig, axes = plt.subplots(1, n_params, figsize=(4 * n_params, 4))
 
-    for p, (ax, name) in enumerate(zip(axes, PARAM_NAMES)):
+    for p, (ax, name) in enumerate(zip(axes, param_names)):
         for gt_i in range(n_gt_combos):
             est_vals = recovered_params[gt_i, :, p]
             true_val = np.full(n_repeats, true_params[gt_i, p])
@@ -389,23 +412,24 @@ def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_pa
     print(f"Recovery scatter saved -> {save_path.resolve()}")
 
 
-def save_recovery_table(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path) -> None:
+def save_recovery_table(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path,
+                         param_names: list = PARAM_NAMES) -> None:
     """Save a per-ground-truth-combo CSV: true value, recovered mean, and bias for every parameter.
 
     Companion to ``plot_recovery`` — the GT combo index (``gt_i``) matches
-    that plot's legend/color, so a point's exact context (all 5 true
+    that plot's legend/color, so a point's exact context (all true
     parameter values at once) can be looked up by combo index rather than
-    read off the scatter.
+    read off the scatter. ``param_names`` overridable, see ``plot_recovery``.
     """
     n_gt_combos = true_params.shape[0]
     header = ["gt_combo"]
-    for name in PARAM_NAMES:
+    for name in param_names:
         header += [f"true_{name}", f"recovered_mean_{name}", f"bias_{name}"]
 
     rows = []
     for gt_i in range(n_gt_combos):
         row = [gt_i]
-        for p in range(len(PARAM_NAMES)):
+        for p in range(len(param_names)):
             true_val = true_params[gt_i, p]
             recovered_mean = recovered_params[gt_i, :, p].mean()
             row += [true_val, recovered_mean, recovered_mean - true_val]
@@ -422,6 +446,7 @@ def plot_noise_comparison(
     true_params: np.ndarray,
     recovered_by_noise: dict,
     save_path: Path,
+    param_names: list = PARAM_NAMES,
 ) -> None:
     """Per-parameter recovery scatter, overlaying all noise levels for the SAME ground truths.
 
@@ -433,9 +458,11 @@ def plot_noise_comparison(
 
     Parameters
     ----------
-    true_params : np.ndarray, shape (n_gt_combos, 5)
+    true_params : np.ndarray, shape (n_gt_combos, n_params)
     recovered_by_noise : dict[str, np.ndarray]
-        ``{noise_voxel: recovered_params}``, each shape (n_gt_combos, n_noise_repeats, 5).
+        ``{noise_voxel: recovered_params}``, each shape (n_gt_combos, n_noise_repeats, n_params).
+    param_names : list
+        Overridable, see ``plot_recovery``.
     """
     n_params = true_params.shape[1]
     noise_levels = list(recovered_by_noise.keys())
@@ -443,7 +470,7 @@ def plot_noise_comparison(
 
     fig, axes = plt.subplots(1, n_params, figsize=(4 * n_params, 4))
 
-    for p, (ax, name) in enumerate(zip(axes, PARAM_NAMES)):
+    for p, (ax, name) in enumerate(zip(axes, param_names)):
         all_vals = [true_params[:, p]]
         for noise_voxel in noise_levels:
             recovered_params = recovered_by_noise[noise_voxel]
@@ -505,67 +532,73 @@ def main() -> None:
 
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
 
-    # Random-seeded, not the real experiment's fixed BASE_SEED=42 — offset
-    # into the same "distinct from BASE_SEED" pool used by the existing
-    # gt35_singlerun_worker.py / gt_onoff_singlerun_worker.py design-seed
-    # sweeps (DESIGN_SEEDS = [1000 + i for i in range(N_DESIGN_SEEDS)]),
-    # so this can never collide with the real pipeline's per-run seeds.
-    run_design_seeds = [1000 + int(s) for s in
-                        np.random.default_rng().integers(0, 100_000, size=N_RUNS_RECOVERY)]
-    print(f"  Run-design seeds: {run_design_seeds}")
-    run_designs = [
-        generate_run_design(
-            base_trials, seq_id_fn,
-            trial_duration_s=TRIAL_DURATION_S,
-            opening_blank_s=OPENING_BLANK_S,
-            iti_range_s=ITI_RANGE_S,
-            seed=seed,
-        )
-        for seed in run_design_seeds
-    ]
-    for run_idx, design in enumerate(run_designs):
-        last_onset_s = design[-1][1]
-        derived_run_dur_s = last_onset_s + TRIAL_DURATION_S + CLOSING_BLANK_S
-        assert np.isclose(derived_run_dur_s, TOTAL_RUN_DUR_S), (
-            f"Run {run_idx}: derived run length {derived_run_dur_s:.3f}s != "
-            f"TOTAL_RUN_DUR_S={TOTAL_RUN_DUR_S}s."
-        )
+    print(f"\nSweeping {N_DESIGN_SEEDS} design seeds: {DESIGN_SEEDS}")
+    for design_seed in DESIGN_SEEDS:
+        print(f"\n######## Design seed {design_seed} ########")
 
-    candidate_params, template_matrix_norm = build_candidate_grid(
-        raw_sequences, cf_list_hz, run_designs, hrf_kernel,
-    )
-    np.savez(CANDIDATE_GRID_PATH,
-             candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
-    print(f"Candidate grid saved -> {CANDIDATE_GRID_PATH.resolve()}")
-
-    # One independent GT sample per mode (on-grid vs. off-grid are different
-    # tests, not the same ground truths under different noise — see
-    # GT_SAMPLING_MODES), but reused identically across every noise level
-    # within that mode — see run_recovery's docstring for why that part
-    # can't happen inside the noise-level loop.
-    for gt_mode in GT_SAMPLING_MODES:
-        print(f"\n=== GT sampling mode: '{gt_mode}' ===")
-        gt_rng = np.random.default_rng(MC_SEED)
-        true_params = sample_ground_truths(gt_rng, n_cf, N_GT_COMBOS, gt_mode)
-
-        recovered_by_noise = {}
-        for noise_voxel in NOISE_VOXELS:
-            print(f"\nRunning recovery at gt_mode='{gt_mode}', noise_voxel='{noise_voxel}': "
-                  f"{N_GT_COMBOS} ground-truth combos x {N_NOISE_REPEATS:,} noise repeats each ...")
-            recovered_params = run_recovery(
-                raw_sequences, cf_list_hz, run_designs, hrf_kernel,
-                candidate_params, template_matrix_norm, true_params, noise_voxel,
+        # Run-design sub-seeds derived deterministically from design_seed
+        # (reproducible: same design_seed always gives the same run designs,
+        # unlike the previous "random each execution" scheme) — offset into
+        # the same "distinct from the real pipeline's BASE_SEED=42" pool as
+        # gt35_singlerun_worker.py's DESIGN_SEEDS.
+        run_design_seeds = [1000 + int(s) for s in
+                            np.random.default_rng(design_seed).integers(0, 100_000, size=N_RUNS_RECOVERY)]
+        print(f"  Run-design seeds: {run_design_seeds}")
+        run_designs = [
+            generate_run_design(
+                base_trials, seq_id_fn,
+                trial_duration_s=TRIAL_DURATION_S,
+                opening_blank_s=OPENING_BLANK_S,
+                iti_range_s=ITI_RANGE_S,
+                seed=seed,
             )
-            recovered_by_noise[noise_voxel] = recovered_params
+            for seed in run_design_seeds
+        ]
+        for run_idx, design in enumerate(run_designs):
+            last_onset_s = design[-1][1]
+            derived_run_dur_s = last_onset_s + TRIAL_DURATION_S + CLOSING_BLANK_S
+            assert np.isclose(derived_run_dur_s, TOTAL_RUN_DUR_S), (
+                f"Run {run_idx}: derived run length {derived_run_dur_s:.3f}s != "
+                f"TOTAL_RUN_DUR_S={TOTAL_RUN_DUR_S}s."
+            )
 
-            intermediate_path, scatter_plot_path, recovery_table_path = recovery_output_paths(gt_mode, noise_voxel)
-            np.savez(intermediate_path, true_params=true_params, recovered_params=recovered_params,
-                     param_names=PARAM_NAMES)
-            print(f"Recovery results saved -> {intermediate_path.resolve()}")
-            plot_recovery(true_params, recovered_params, scatter_plot_path)
-            save_recovery_table(true_params, recovered_params, recovery_table_path)
+        candidate_params, template_matrix_norm = build_candidate_grid(
+            raw_sequences, cf_list_hz, run_designs, hrf_kernel,
+        )
+        cgp = candidate_grid_path(design_seed)
+        np.savez(cgp, candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
+        print(f"Candidate grid saved -> {cgp.resolve()}")
 
-        plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(gt_mode))
+        # Same ground truths across every design seed too (not just across
+        # noise levels) — MC_SEED is unchanged here, so sample_ground_truths
+        # deterministically reproduces the identical N_GT_COMBOS combos each
+        # time, isolating "does run design affect recovery" from "did the
+        # ground truths happen to differ."
+        for gt_mode in GT_SAMPLING_MODES:
+            print(f"\n=== design_seed={design_seed}, GT sampling mode: '{gt_mode}' ===")
+            gt_rng = np.random.default_rng(MC_SEED)
+            true_params = sample_ground_truths(gt_rng, n_cf, N_GT_COMBOS, gt_mode)
+
+            recovered_by_noise = {}
+            for noise_voxel in NOISE_VOXELS:
+                print(f"\nRunning recovery at design_seed={design_seed}, gt_mode='{gt_mode}', "
+                      f"noise_voxel='{noise_voxel}': {N_GT_COMBOS} ground-truth combos x "
+                      f"{N_NOISE_REPEATS:,} noise repeats each ...")
+                recovered_params = run_recovery(
+                    raw_sequences, cf_list_hz, run_designs, hrf_kernel,
+                    candidate_params, template_matrix_norm, true_params, noise_voxel,
+                )
+                recovered_by_noise[noise_voxel] = recovered_params
+
+                intermediate_path, scatter_plot_path, recovery_table_path = recovery_output_paths(
+                    design_seed, gt_mode, noise_voxel)
+                np.savez(intermediate_path, true_params=true_params, recovered_params=recovered_params,
+                         param_names=PARAM_NAMES)
+                print(f"Recovery results saved -> {intermediate_path.resolve()}")
+                plot_recovery(true_params, recovered_params, scatter_plot_path)
+                save_recovery_table(true_params, recovered_params, recovery_table_path)
+
+            plot_noise_comparison(true_params, recovered_by_noise, noise_comparison_plot_path(design_seed, gt_mode))
 
 
 if __name__ == "__main__":
