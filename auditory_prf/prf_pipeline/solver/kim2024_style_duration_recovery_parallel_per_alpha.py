@@ -77,6 +77,15 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_duration_recovery import (
     accuracy_comparison_plot_path,
 )
 
+# TEMPORARY, first full-scale run only (per project discussion): confirm ONE
+# design seed completes end-to-end (candidate grid + MC recovery, ~73,920
+# candidates x 3 noise levels x 100 voxels x 10,000 repeats) before
+# committing to the full 10-seed sweep -- a single seed's candidate-grid
+# build alone already took 45+ minutes in the run that prompted this change.
+# Revert to the full DESIGN_SEEDS (remove this override) once that's confirmed.
+N_DESIGN_SEEDS = 1
+DESIGN_SEEDS   = DESIGN_SEEDS[:1]
+
 
 def main() -> None:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
