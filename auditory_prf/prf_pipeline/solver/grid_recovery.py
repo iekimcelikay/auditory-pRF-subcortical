@@ -463,6 +463,15 @@ def plot_noise_comparison(
         ``{noise_voxel: recovered_params}``, each shape (n_gt_combos, n_noise_repeats, n_params).
     param_names : list
         Overridable, see ``plot_recovery``.
+
+    Points from every noise level are combined and drawn in a single,
+    RANDOMLY SHUFFLED order (fixed seed, for reproducibility) rather than
+    one sequential ``scatter()`` call per level — per project discussion,
+    plotting each level separately made whichever level was drawn LAST
+    (``high``) visually cover the others wherever points overlapped, at
+    both debug and full scale, even though low/mid points were equally
+    present underneath. A shuffled single draw order gives every level a
+    fair, even chance of being "on top" wherever they overlap.
     """
     n_params = true_params.shape[1]
     noise_levels = list(recovered_by_noise.keys())
@@ -470,29 +479,42 @@ def plot_noise_comparison(
 
     fig, axes = plt.subplots(1, n_params, figsize=(4 * n_params, 4))
 
+    n_repeats = next(iter(recovered_by_noise.values())).shape[1]
+    shuffle_rng = np.random.default_rng(0)
+    order = None   # built once we know the combined point count (same for every panel)
+
     for p, (ax, name) in enumerate(zip(axes, param_names)):
-        all_vals = [true_params[:, p]]
+        est_all, true_all, color_all = [], [], []
         for noise_voxel in noise_levels:
             recovered_params = recovered_by_noise[noise_voxel]
-            n_repeats = recovered_params.shape[1]
             true_vals = np.repeat(true_params[:, p], n_repeats)
             est_vals  = recovered_params[:, :, p].ravel()
-            all_vals.append(est_vals)
-            ax.scatter(est_vals, true_vals, s=5, alpha=0.15,
-                       color=level_colors.get(noise_voxel, "steelblue"),
-                       label=noise_voxel if p == 0 else None)
+            est_all.append(est_vals)
+            true_all.append(true_vals)
+            color_all.extend([level_colors.get(noise_voxel, "steelblue")] * len(est_vals))
+        est_all  = np.concatenate(est_all)
+        true_all = np.concatenate(true_all)
+        color_all = np.array(color_all)
 
-        lo = min(v.min() for v in all_vals)
-        hi = max(v.max() for v in all_vals)
+        if order is None:
+            order = shuffle_rng.permutation(len(est_all))
+        est_all, true_all, color_all = est_all[order], true_all[order], color_all[order]
+
+        ax.scatter(est_all, true_all, s=5, alpha=0.15, color=color_all)
+
+        lo = min(true_all.min(), est_all.min())
+        hi = max(true_all.max(), est_all.max())
         ax.plot([lo, hi], [lo, hi], "--", color="black", linewidth=1, zorder=0)
         ax.set_xlabel(f"recovered {name}")
         ax.set_ylabel(f"true {name}")
         ax.set_title(name)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    for handle in handles:
-        handle.set_alpha(1.0)   # legend swatches stay readable regardless of the data points' alpha
-    fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.0, 0.5),
+    # Built manually -- no per-point labelled scatter() calls to harvest
+    # legend handles from anymore (see above: one shuffled call instead of
+    # one call per noise level).
+    handles = [plt.Line2D([0], [0], marker="o", linestyle="", color=level_colors.get(nv, "steelblue"))
+               for nv in noise_levels]
+    fig.legend(handles, noise_levels, loc="center left", bbox_to_anchor=(1.0, 0.5),
                fontsize=8, title="noise level")
 
     plt.tight_layout()
