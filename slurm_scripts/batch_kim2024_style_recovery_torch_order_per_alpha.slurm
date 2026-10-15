@@ -5,10 +5,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%j.out
-#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%j.err
+#SBATCH --array=0-9
+#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%A_%a.out
+#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=e.celikay@bcbl.eu
 

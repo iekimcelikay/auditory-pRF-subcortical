@@ -81,10 +81,16 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery_torch_order import 
     noise_comparison_plot_path,
     accuracy_table_path,
     accuracy_comparison_plot_path,
-    run_recovery,
 )
+from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
+from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
 
 N_WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+
+# SLURM array: task i runs design seed DESIGN_SEEDS[i] only (see the .slurm's --array).
+if "SLURM_ARRAY_TASK_ID" in os.environ:
+    DESIGN_SEEDS = [DESIGN_SEEDS[int(os.environ["SLURM_ARRAY_TASK_ID"])]]
+    N_DESIGN_SEEDS = len(DESIGN_SEEDS)
 
 _worker: dict = {}
 
@@ -171,6 +177,74 @@ def build_candidate_grid_per_alpha(
     template_matrix /= np.where(norms == 0, 1.0, norms)
 
     return candidate_params, template_matrix
+
+
+def _recover_one_voxel(v_i: int, true_row: np.ndarray, state: dict) -> np.ndarray:
+    """Worker task: all MC noise repeats for one ground-truth voxel.
+
+    Returns
+    -------
+    np.ndarray, shape (N_NOISE_REPEATS, 4)
+        Recovered (cf_index, tau_ms, alpha, w) per repeat.
+    """
+    cf_index_f, tau_ms, alpha, w = true_row
+    cf_index = int(round(cf_index_f))
+    per_seq, cf_hz = build_per_seq_trains_torch_order_fixed_reference(
+        state["raw_sequences"], cf_index, state["cf_list_hz"], alpha, TC_SILENCE_SEQ_ID,
+        state["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
+    )
+    gt_bold_per_run = forward_bold_runs(
+        per_seq, state["run_designs"], state["hrf_kernel"], cf_hz,
+        TOTAL_RUN_DUR_S, TR_S, SIGNAL_DT_S, w, tau_ms, tau_ms, RECTIFY, RHO,
+    )
+
+    n_timepoints = sum(len(r) for r in gt_bold_per_run)
+    measurements = np.empty((N_NOISE_REPEATS, n_timepoints), dtype=np.float32)
+    for rep in range(N_NOISE_REPEATS):
+        run_seeds = spawn_noise_seeds(MC_SEED, v_i, rep, n_runs=N_RUNS_RECOVERY)
+        measurements[rep, :] = draw_noisy_measurement(
+            gt_bold_per_run, state["noise_voxel"], TR_S, run_seeds,
+        )
+
+    best_idx = best_match_indices(state["template_matrix_norm"], measurements)
+    return state["candidate_params"][best_idx]
+
+
+def run_recovery(
+    raw_sequences: dict,
+    cf_list_hz: np.ndarray,
+    run_designs: list,
+    hrf_kernel: np.ndarray,
+    reference_table: np.ndarray,
+    candidate_params: np.ndarray,
+    template_matrix_norm: np.ndarray,
+    true_params: np.ndarray,
+    noise_voxel: str,
+    n_workers: int = N_WORKERS,
+) -> np.ndarray:
+    """Voxel-parallel version of
+    ``kim2024_style_recovery_torch_order.run_recovery`` (same seeds, same
+    per-voxel procedure; repeats are scored in memory-bounded chunks).
+
+    Returns
+    -------
+    np.ndarray, shape (n_voxels, N_NOISE_REPEATS, 4)
+    """
+    n_voxels = true_params.shape[0]
+    recovered_params = np.empty((n_voxels, N_NOISE_REPEATS, 4), dtype=float)
+    state = dict(
+        raw_sequences=raw_sequences, cf_list_hz=cf_list_hz, run_designs=run_designs,
+        hrf_kernel=hrf_kernel, reference_table=reference_table,
+        candidate_params=candidate_params, template_matrix_norm=template_matrix_norm,
+        noise_voxel=noise_voxel,
+    )
+    for v_i, voxel_recovered in enumerate(map_voxels(_recover_one_voxel, true_params, state, n_workers)):
+        recovered_params[v_i] = voxel_recovered
+        cf_index_f, tau_ms, alpha, w = true_params[v_i]
+        bias = voxel_recovered.mean(axis=0) - [int(round(cf_index_f)), tau_ms, alpha, w]
+        print(f"  [{noise_voxel}] voxel {v_i+1}/{n_voxels}: true cf_index={int(round(cf_index_f))} "
+              f"tau={tau_ms:.1f} alpha={alpha:.3f} w={w:.3f} | bias={np.round(bias, 3)}", flush=True)
+    return recovered_params
 
 
 def main() -> None:
