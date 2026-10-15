@@ -131,22 +131,17 @@ class CFSelector(nn.Module):
     Because x_map is evenly spaced, the fractional row index is computed
     directly as (cf_x - x_min) / x_step — no search needed.
 
-    Greenwood constants (A=165.4, k=0.88, a=2.1) match calc_cfs() in
-    cochlea/cochlea/zilany2014/util.py (human species).
-
     Parameters
     ----------
     cf_hz_array : np.ndarray, shape (n_cf,)
         CF values in Hz from the cochlear simulation. Obtain via
         CochleaConfig.get_batch_cf_array() or
-        calc_cfs((min_cf, max_cf, n_cf), species='human').
+        calc_cfs((min_cf, max_cf, n_cf), species='human'). (IF GREENWOOD)
     init_cf_hz : float
         Initial preferred CF in Hz. Clamped to [cf_hz_array[0], cf_hz_array[-1]].
     """
 
-    _A: float = 165.4   # Greenwood A (Hz)
-    _k: float = 0.88    # Greenwood k
-    _a: float = 2.1     # Greenwood a (position units)
+
 
     def __init__(self, cf_hz_array: np.ndarray, init_cf_hz: float) -> None:
         super().__init__()
@@ -227,22 +222,33 @@ class PowerLawSharpening(nn.Module):
     def alpha(self) -> torch.Tensor:
         return torch.exp(self._log_alpha).clamp(self.ALPHA_MIN, self.ALPHA_MAX)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        population: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Parameters
         ----------
         x : Tensor, any shape
-            Firing rate values to sharpen (e.g. (n_tones,) mean rates).
+            Firing rate values to sharpen (e.g. (n_tones,) mean rates of the
+            selected CF).
+        population : Tensor, any shape, optional
+            PRE-power-law rates of the whole population (e.g. (n_cf, n_tones)).
+            If given, the rescale is ``mean(population) / mean(population**alpha)``,
+            so the population mean is preserved and the selected CF is scaled
+            against the population, not against itself. If None, falls back
+            to self-normalizing on ``x``.
 
         Returns
         -------
-        sharpened : Tensor, same shape as input
-            Mean-normalized: mean(sharpened) == mean(input).
+        sharpened : Tensor, same shape as x
         """
         alpha     = self.alpha
         sharpened = x ** alpha
-        in_mean   = x.mean()
-        out_mean  = sharpened.mean()
+        reference = x if population is None else population
+        in_mean   = reference.mean()
+        out_mean  = (reference ** alpha).mean()
         if out_mean > 0:
             sharpened = sharpened * (in_mean / out_mean)
         return sharpened
@@ -564,7 +570,27 @@ class AuditoryPRFPipeline(nn.Module):
             NoiseModel(config.noise_model, config.tr_s)
             if config.noise_model is not None else None
         )
+        # Pre-power-law population pool (all CFs x all tone windows of every
+        # sequence, incl. silence). Built once, held in memory; see
+        # reference_calibration.build_population_pool. None -> the sharpening
+        # self-normalizes on the selected CF (legacy behaviour).
+        self.register_buffer("population_pool", None)
         self._apply_variant_freezing(model_variant)
+
+    def set_population_pool(self, population_pool: np.ndarray) -> None:
+        """Store the pre-power-law population pool used by the sharpening rescale.
+
+        Parameters
+        ----------
+        population_pool : np.ndarray, shape (n_pool,)
+            Pre-power-law rates; the rescale is
+            ``mean(pool) / mean(pool ** alpha)``.
+        """
+        assert population_pool.ndim == 1 and population_pool.size > 0, population_pool.shape
+        device = self.sharpening._log_alpha.device
+        self.population_pool = torch.as_tensor(
+            population_pool, dtype=torch.float32, device=device,
+        )
 
     @property
     def on_off_ratio(self) -> torch.Tensor:
@@ -606,8 +632,9 @@ class AuditoryPRFPipeline(nn.Module):
         # Stage 2: per-tone mean rates (recomputed inside graph for alpha grad)
         mean_rates = recompute_mean_rates(cf_tc, chunk)       # (n_tones,)
 
-        # Stage 3: power-law sharpening on mean rates
-        sharpened = self.sharpening(mean_rates)               # (n_tones,)
+        # Stage 3: power-law sharpening on mean rates, rescaled against the
+        # stored pre-power-law population pool (None -> self-normalizing)
+        sharpened = self.sharpening(mean_rates, self.population_pool)    # (n_tones,)
 
         if self.model_variant == 0:
             # Notemporal path: no AdapTrans, no duration filter.

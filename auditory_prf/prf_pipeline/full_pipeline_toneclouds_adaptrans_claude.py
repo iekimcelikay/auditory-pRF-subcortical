@@ -35,8 +35,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_population_psth
-from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
+from auditory_prf.prf_pipeline.load_extract_cf_timecourse import (
+    iter_population_pool,
+    load_population_psth,
+)
+from auditory_prf.prf_pipeline.powerlaw_function import (
+    apply_powerlaw_population,
+    compute_population_scale,
+)
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
 from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_scalar
@@ -403,6 +409,13 @@ def run_pipeline(
     logger.info("Base trials: %d active + %d null = %d total",
                 len(stimuli), n_null, len(base_trials))
 
+    # ── Phase 0: population rescale factor (pre-power-law tone-window pool: all CFs, all sequences, silence mean per CF) ──
+    # Depends on alpha, so it is recomputed for every call of this pipeline.
+    population_scale = compute_population_scale(
+        iter_population_pool(npz_files, cf, TC_SILENCE_SEQ_ID, chunk_margin_ms), alpha
+    )
+    logger.info("Population power-law scale (alpha=%.2f): %.6e", alpha, population_scale)
+
     # ── Phase 1: per-sequence processing ──────────────────────────────────────
     per_seq: dict = {}
 
@@ -414,25 +427,22 @@ def run_pipeline(
         )
         dt_s         = time_axis[1] - time_axis[0]
         total_dur_ms = (time_axis[-1] + dt_s) * 1000.0
-        # . POWER LAW SHARPENING (full population matrix) → CHUNK INTO TONE-ON WINDOWS → MEAN RATES
-        sharpened_pop   = apply_powerlaw_population(population_psth, alpha)
+        # . SELECT CF → CHUNK INTO TONE-ON WINDOWS → MEAN RATES → POWER LAW SHARPENING (population-pool rescale)
         cf_tc_raw       = population_psth[cf_index, :]
-        cf_tc_sharpened = sharpened_pop[cf_index, :]
         # If silence, than rather than chunking take the mean, which is the spontaneous rate, and build a flat train of that value
         if seq_id == TC_SILENCE_SEQ_ID:
-            spont_rate = float(np.mean(cf_tc_sharpened))
+            spont_rate = float(apply_powerlaw_population(np.mean(cf_tc_raw), alpha, population_scale))
             n_samples  = int(round(total_dur_ms))
             train      = np.full(n_samples, spont_rate)
             logger.debug("  seq_id=%s | CF=%.0f Hz | spont_rate=%.2f sp/s | train len=%d",
                          seq_id, cf_hz, spont_rate, len(train))
         else:
-            result, tone_dur_ms, _ = chunk_from_id(cf_tc_sharpened, time_axis, seq_id, chunk_margin_ms)
+            result, tone_dur_ms, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id, chunk_margin_ms)
 
-            mean_rates_on = np.array([np.mean(c) for c in result["chunks"]])
+            raw_mean_rates = np.array([np.mean(c) for c in result["chunks"]])
+            mean_rates_on  = apply_powerlaw_population(raw_mean_rates, alpha, population_scale)
 
             if save_plots:
-                raw_result, _, _ = chunk_from_id(cf_tc_raw, time_axis, seq_id)
-                raw_mean_rates = np.array([np.mean(c) for c in raw_result["chunks"]])
                 _plot_sharpening(raw_mean_rates, mean_rates_on, alpha, seq_id, plot_dir)
                 _plot_chunk_mean_rates(mean_rates_on, seq_id, plot_dir)
         # . (OPTIONAL) Gaussian duration filter

@@ -23,8 +23,14 @@ import logging
 
 from auditory_prf.utils.logging_configurator import LoggingConfigurator
 from auditory_prf.utils.cochlea_loader_functions import resolve_results_dir
-from auditory_prf.prf_pipeline.load_extract_cf_timecourse import load_population_psth
-from auditory_prf.prf_pipeline.powerlaw_function import apply_powerlaw_population
+from auditory_prf.prf_pipeline.load_extract_cf_timecourse import (
+    iter_population_pool,
+    load_population_psth,
+)
+from auditory_prf.prf_pipeline.powerlaw_function import (
+    apply_powerlaw_population,
+    compute_population_scale,
+)
 from auditory_prf.prf_pipeline.chunk_timecourse import chunk_from_id
 from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_scalar
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import (
@@ -70,6 +76,13 @@ def run_pipeline(
         sys.exit(1)
     logger.info("Found %d .npz file(s)", len(npz_files))
 
+    # ── Phase 0: population rescale factor (pre-power-law tone-window pool: all CFs, all sequences, silence mean per CF) ──
+    # Depends on alpha, so it is recomputed for every call of this pipeline.
+    population_scale = compute_population_scale(
+        iter_population_pool(npz_files, cf, None, CHUNK_MARGIN_MS), alpha
+    )
+    logger.info("Population power-law scale (alpha=%.2f): %.6e", alpha, population_scale)
+
     for i, npz_path in enumerate(npz_files, 1):
         logger.info("[%d/%d] Processing: %s", i, len(npz_files), npz_path.name)
 
@@ -82,17 +95,17 @@ def run_pipeline(
         n_1ms = math.ceil(total_dur_ms)
         logger.debug("   total_dur_ms: %.1f ms | dt: %.4f ms", total_dur_ms, dt_s * 1000.0)
 
-        # 3. Power-law sharpening
-        sharpened_pop = apply_powerlaw_population(population_psth, alpha)
-        sharpened = sharpened_pop[cf_index, :]
-
-        # 4. Chunk into tone-on windows
-        result, tone_dur_ms, isi_ms = chunk_from_id(sharpened, time_axis, seq_id, CHUNK_MARGIN_MS)
+        # 3. Select CF, then chunk into tone-on windows
+        cf_timecourse = population_psth[cf_index, :]
+        result, tone_dur_ms, isi_ms = chunk_from_id(cf_timecourse, time_axis, seq_id, CHUNK_MARGIN_MS)
         n_tones = len(result["chunks"])
         logger.debug("  Tone dur: %.1f ms | ISI: %.1f ms | n_tones %d",
                      tone_dur_ms, isi_ms, n_tones)
 
-        mean_rates_on = [np.mean(c) for c in result["chunks"]]
+        # 4. Power-law sharpening of the per-tone mean rates (population-pool rescale)
+        mean_rates_on = list(apply_powerlaw_population(
+            np.array([np.mean(c) for c in result["chunks"]]), alpha, population_scale
+        ))
 
         # 5. Duration Gaussian (scalar)
         prf_responses = [

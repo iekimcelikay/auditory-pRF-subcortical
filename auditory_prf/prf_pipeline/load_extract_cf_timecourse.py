@@ -188,3 +188,65 @@ def build_per_seq_trains(npz_files, cf_idx, alpha, tc_silence_seq_id, chunk_marg
         per_seq[seq_id] = {"train": train, "cf_hz": cf_hz}
         cf_hz_used = cf_hz
     return per_seq, cf_hz_used
+
+
+def population_tone_rates(
+    population_psth: np.ndarray,
+    time_axis: np.ndarray,
+    seq_id: str,
+    chunk_margin_ms: float = 50.0,
+) -> np.ndarray:
+    """Pre-power-law mean rate of EVERY CF in every tone-ON window.
+
+    Uses the identical windows ``chunk_from_id`` gives the selected CF, by
+    chunking an index ramp and averaging the 2-D PSTH over those indices.
+
+    Parameters
+    ----------
+    population_psth : np.ndarray, shape (n_cf, n_bins)
+        Raw (unsharpened) population PSTH of one sequence.
+    time_axis : np.ndarray, shape (n_bins,)
+        Time axis in seconds.
+    seq_id : str
+        Identifier containing ``dur<N>ms`` / ``isi<N>ms`` tokens.
+    chunk_margin_ms : float
+        Extra window after tone offset, same as the pipeline's chunk margin.
+
+    Returns
+    -------
+    np.ndarray, shape (n_cf, n_tones)
+    """
+    assert population_psth.ndim == 2, population_psth.shape
+    index_ramp = np.arange(population_psth.shape[1], dtype=np.float64)
+    result, _dur_ms, _isi_ms = chunk_from_id(index_ramp, time_axis, seq_id, chunk_margin_ms)
+    tone_rates = np.stack(
+        [population_psth[:, chunk.astype(int)].mean(axis=1) for chunk in result["chunks"]],
+        axis=1,
+    )
+    assert tone_rates.shape == (population_psth.shape[0], len(result["chunks"]))
+    return tone_rates
+
+
+def iter_population_pool(npz_files, cf, silence_seq_id=None, chunk_margin_ms: float = 50.0):
+    """Yield the pre-power-law population pool, one array per sequence.
+
+    Active sequences yield (n_cf, n_tones) tone-window mean rates of ALL CFs;
+    the silence sequence yields (n_cf,) per-CF mean rates. Feed to
+    ``powerlaw_function.compute_population_scale``.
+
+    Parameters
+    ----------
+    npz_files : iterable of Path
+    cf : int or float
+        Only used to satisfy ``load_population_psth``; the pool covers all CFs.
+    silence_seq_id : str, optional
+        Sequence id of the silence/null trial. None = every file is active.
+    chunk_margin_ms : float
+        Must equal the pipeline's chunk margin.
+    """
+    for npz_path in npz_files:
+        population_psth, time_axis, _cf_index, _cf_hz, seq_id = load_population_psth(npz_path, cf)
+        if silence_seq_id is not None and seq_id == silence_seq_id:
+            yield population_psth.mean(axis=1)
+        else:
+            yield population_tone_rates(population_psth, time_axis, seq_id, chunk_margin_ms)

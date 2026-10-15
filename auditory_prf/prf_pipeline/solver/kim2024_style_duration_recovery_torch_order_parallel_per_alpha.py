@@ -41,7 +41,7 @@ from auditory_prf.prf_pipeline.solver.forward_model import load_raw_sequences, f
 from auditory_prf.prf_pipeline.solver.forward_model_torch_order_fixed_reference import (
     build_per_seq_trains_torch_order_fixed_reference,
 )
-from auditory_prf.prf_pipeline.solver.reference_calibration import build_per_cf_reference_table
+from auditory_prf.prf_pipeline.solver.reference_calibration import build_population_pool
 from auditory_prf.prf_pipeline.solver.grid_recovery import (
     RESULTS_DIR,
     TR_S,
@@ -97,11 +97,11 @@ _worker: dict = {}
 
 
 def _init_worker(raw_sequences: dict, cf_list_hz: np.ndarray, alpha: float,
-                  reference_table: np.ndarray, run_designs: list, hrf_kernel: np.ndarray) -> None:
+                  population_pool: np.ndarray, run_designs: list, hrf_kernel: np.ndarray) -> None:
     _worker["raw_sequences"] = raw_sequences
     _worker["cf_list_hz"] = cf_list_hz
     _worker["alpha"] = alpha
-    _worker["reference_table"] = reference_table
+    _worker["population_pool"] = population_pool
     _worker["run_designs"] = run_designs
     _worker["hrf_kernel"] = hrf_kernel
 
@@ -113,7 +113,7 @@ def _build_one_candidate(params: tuple) -> np.ndarray:
 
     per_seq, cf_hz = build_per_seq_trains_torch_order_fixed_reference(
         _worker["raw_sequences"], cf_index, _worker["cf_list_hz"], _worker["alpha"],
-        TC_SILENCE_SEQ_ID, _worker["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
+        TC_SILENCE_SEQ_ID, _worker["population_pool"], chunk_margin_ms=CHUNK_MARGIN_MS,
         pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
     )
     bold_per_run = forward_bold_runs(
@@ -129,7 +129,7 @@ def build_candidate_grid_per_alpha(
     cf_list_hz: np.ndarray,
     run_designs: list,
     hrf_kernel: np.ndarray,
-    reference_table: np.ndarray,
+    population_pool: np.ndarray,
     n_workers: int = N_WORKERS,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-alpha-pool parallel version of
@@ -155,7 +155,7 @@ def build_candidate_grid_per_alpha(
         ]
 
         with Pool(processes=n_workers, initializer=_init_worker,
-                  initargs=(raw_sequences, cf_list_hz, alpha, reference_table, run_designs, hrf_kernel)) as pool:
+                  initargs=(raw_sequences, cf_list_hz, alpha, population_pool, run_designs, hrf_kernel)) as pool:
             for local_i, template in enumerate(
                 pool.imap(_build_one_candidate, candidate_param_list, chunksize=chunk_size)
             ):
@@ -189,7 +189,7 @@ def _recover_one_voxel(v_i: int, true_row: np.ndarray, state: dict) -> np.ndarra
     cf_index = int(round(cf_index_f))
     per_seq, cf_hz = build_per_seq_trains_torch_order_fixed_reference(
         state["raw_sequences"], cf_index, state["cf_list_hz"], alpha, TC_SILENCE_SEQ_ID,
-        state["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
+        state["population_pool"], chunk_margin_ms=CHUNK_MARGIN_MS,
         pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
     )
     gt_bold_per_run = forward_bold_runs(
@@ -215,7 +215,7 @@ def run_recovery(
     cf_list_hz: np.ndarray,
     run_designs: list,
     hrf_kernel: np.ndarray,
-    reference_table: np.ndarray,
+    population_pool: np.ndarray,
     candidate_params: np.ndarray,
     template_matrix_norm: np.ndarray,
     true_params: np.ndarray,
@@ -234,7 +234,7 @@ def run_recovery(
     recovered_params = np.empty((n_voxels, N_NOISE_REPEATS, 4), dtype=float)
     state = dict(
         raw_sequences=raw_sequences, cf_list_hz=cf_list_hz, run_designs=run_designs,
-        hrf_kernel=hrf_kernel, reference_table=reference_table,
+        hrf_kernel=hrf_kernel, population_pool=population_pool,
         candidate_params=candidate_params, template_matrix_norm=template_matrix_norm,
         noise_voxel=noise_voxel,
     )
@@ -276,11 +276,11 @@ def main() -> None:
 
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
 
-    print("Building per-CF fixed reference table (pooled across active sequences) ...")
-    reference_table = build_per_cf_reference_table(
+    print("Building population pool (all CFs, all active sequences + silence) ...")
+    population_pool = build_population_pool(
         raw_sequences, cf_list_hz, TC_SILENCE_SEQ_ID, chunk_margin_ms=CHUNK_MARGIN_MS,
     )
-    print(f"  reference_table shape: {reference_table.shape}")
+    print(f"  population_pool shape: {population_pool.shape}")
 
     print(f"\nSweeping {N_DESIGN_SEEDS} design seeds: {DESIGN_SEEDS}")
     for design_seed in DESIGN_SEEDS:
@@ -308,7 +308,7 @@ def main() -> None:
             )
 
         candidate_params, template_matrix_norm = build_candidate_grid_per_alpha(
-            raw_sequences, cf_list_hz, run_designs, hrf_kernel, reference_table, n_workers=N_WORKERS,
+            raw_sequences, cf_list_hz, run_designs, hrf_kernel, population_pool, n_workers=N_WORKERS,
         )
         cgp = candidate_grid_path(design_seed)
         np.savez(cgp, candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
@@ -323,7 +323,7 @@ def main() -> None:
             print(f"\nRunning Kim-et-al.-style duration recovery at design_seed={design_seed}, "
                   f"noise_voxel='{noise_voxel}': {N_VOXELS} independent voxels, MC repeats each ...")
             recovered_params = run_recovery(
-                raw_sequences, cf_list_hz, run_designs, hrf_kernel, reference_table,
+                raw_sequences, cf_list_hz, run_designs, hrf_kernel, population_pool,
                 candidate_params, template_matrix_norm, true_params, noise_voxel,
             )
             recovered_by_noise[noise_voxel] = recovered_params

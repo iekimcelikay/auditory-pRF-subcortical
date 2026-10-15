@@ -1,42 +1,26 @@
 """reference_calibration.py
 ============================
-Shared utility for building a FIXED, per-CF power-law-sharpening reference
-table — the calibration anchor that replaces each pipeline's previous
-SELF-NORMALIZING rescale (which recomputed ``mean(input) == mean(output)``
-fresh from whatever narrow slice of data happened to be in scope for one
-call, forcing that call's own mean to stay pinned to itself and making alpha
-structurally incapable of expressing gain differences across sequences/CFs
-— see project discussion).
+Builds the pre-power-law POPULATION pool used to rescale the power-law
+sharpening (tone-window granularity, i.e. torch order: select CF -> chunk ->
+sharpen).
 
-Design (per project discussion):
-  - Per-CF, not global-across-CF: different CFs have genuinely different
-    typical response levels (tonotopic tuning is real signal, not noise to
-    average away), so one single population-wide constant would distort
-    that. Each CF gets its own reference.
-  - Pooled across EVERY active sequence, unweighted: no frequency-proximity
-    cherry-picking of "preferred" conditions — that would just be a
-    different hidden parameter choice (how close counts as close?). A
-    sharply-tuned CF ending up with a lower reference than a broadly-tuned
-    one is not a bias to correct for; it's an honest reflection of what
-    "sharply tuned" means when averaged over its whole natural stimulus
-    diet.
-  - Silence/null excluded: the reference calibrates the duration/CF-tuned
-    nonlinearity specifically, on active (tone-driven) trials only.
-  - Computed ONCE, offline, from the raw (unsharpened) cochlear data — never
-    recomputed from a single forward call's own narrow input.
+The rescale factor is ``mean(pool) / mean(pool ** alpha)`` — computed per
+alpha call, applied to the selected CF's sharpened per-tone mean rates, so the
+selected CF is normalized against the whole population instead of against
+itself (which pinned its mean and made alpha unable to express any gain
+difference across CFs).
 
-Used by:
-  - forward_model_fixed_reference.py (sharpen-before-CF-select order,
-    matching forward_model.py's existing stage order, but with THIS fixed
-    reference replacing its current per-sequence self-normalizing rescale)
-  - forward_model_torch_order_fixed_reference.py (CF-select/interpolate-
-    then-chunk-then-sharpen order, matching torch_pipeline.py's order, with
-    this same fixed reference replacing forward_model_torch_order.py's
-    self-normalizing rescale)
-  - torch_pipeline.py itself (exported as a torch buffer, interpolated via
-    the same CFSelector._interp used for the live signal — see project
-    discussion; not yet wired in, pending a separate fix to that file's
-    currently-broken Greenwood constants)
+Pool contents:
+  - every CF x every tone window of every ACTIVE sequence, and
+  - the SILENCE response (one mean rate per CF).
+
+The pool is built ONCE from the raw (unsharpened) cochlear data and reused.
+
+``build_per_cf_reference_table`` (the earlier fixed per-CF table) is kept
+because ``build_population_pool`` is assembled from it.
+
+Used by the ``kim2024_style_*torch_order*`` recovery scripts through
+``forward_model_torch_order_fixed_reference.py``.
 """
 
 import numpy as np
@@ -89,43 +73,34 @@ def build_per_cf_reference_table(
     return np.array(per_cf_rates, dtype=np.float64)
 
 
-def build_per_cf_raw_reference_table(
+def _silence_per_cf_means(
+    raw_sequences: dict,
+    silence_seq_id: str,
+) -> np.ndarray:
+    """Mean raw rate of every CF during silence. Returns shape (n_cf,)."""
+    return np.asarray(raw_sequences[silence_seq_id]["population_psth"]).mean(axis=1)
+
+
+def build_population_pool(
     raw_sequences: dict,
     cf_list_hz: np.ndarray,
     silence_seq_id: str,
+    chunk_margin_ms: float = 30.0,
 ) -> np.ndarray:
-    """Pool RAW (unchunked) per-time-bin values across every ACTIVE
-    sequence, per CF — same philosophy as ``build_per_cf_reference_table``,
-    but at the RAW time-sample granularity instead of chunked tone-pip
-    means.
+    """Pre-power-law POPULATION pool for the power-law rescale (tone-window
+    granularity, matching sharpening AFTER chunking).
 
-    This granularity match matters: ``forward_model_fixed_reference.py``
-    sharpens the FULL, un-averaged ``population_psth`` directly (matching
-    forward_model.py's own order), so its reference must be built from
-    equally-fine-grained raw samples — using the CHUNKED, already-averaged
-    reference from ``build_per_cf_reference_table`` there mismatches
-    granularity (x**alpha on raw, spiky samples has much more dynamic range
-    than x**alpha on already-averaged chunk means), which caused the
-    rescale to massively under-correct and blow up (confirmed empirically:
-    >300,000x inflation at alpha=8 before this fix). Every sequence
-    contributes the same number of time bins (fixed SIGNAL_DT_S
-    resolution), so this is rectangular by construction.
+    Pools the tone-window mean rates of ALL CFs across every active sequence,
+    plus the silence response (one mean per CF). Built ONCE; every forward call
+    then uses ``mean(pool) / mean(pool ** alpha)`` as the rescale factor.
 
     Returns
     -------
-    np.ndarray, shape (n_cf, N)
-        N = total raw time-bins pooled across every active sequence's full
-        duration (tone-ON periods AND inter-tone gaps alike — matching
-        exactly what ``apply_powerlaw_population`` was always calibrated
-        against: the whole raw population, not a tone-ON-only subset).
+    np.ndarray, shape (n_cf * n_active_tones + n_cf,)
     """
-    n_cf = len(cf_list_hz)
-    rows = []
-    for cf_index in range(n_cf):
-        values = []
-        for seq_id, entry in raw_sequences.items():
-            if seq_id == silence_seq_id:
-                continue
-            values.append(entry["population_psth"][cf_index, :])
-        rows.append(np.concatenate(values))
-    return np.stack(rows, axis=0)
+    active_table = build_per_cf_reference_table(
+        raw_sequences, cf_list_hz, silence_seq_id, chunk_margin_ms,
+    )                                                     # (n_cf, N)
+    silence_means = _silence_per_cf_means(raw_sequences, silence_seq_id)  # (n_cf,)
+    assert silence_means.shape[0] == active_table.shape[0]
+    return np.concatenate([active_table.ravel(), silence_means])
