@@ -3,10 +3,7 @@
 #SBATCH --qos=regular
 #SBATCH --job-name=kim2024_style_duration_recovery_per_alpha
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --ntasks=1ba
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_per_alpha_%j.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_per_alpha_%j.err
 #SBATCH --mail-type=ALL

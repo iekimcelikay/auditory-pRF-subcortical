@@ -7,8 +7,9 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
-#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_nonoise_%j.out
-#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_nonoise_%j.err
+#SBATCH --array=0-9
+#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_nonoise_%A_%a.out
+#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_nonoise_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=e.celikay@bcbl.eu
 
@@ -16,8 +17,8 @@
 # normalization) -- see
 # kim2024_style_duration_recovery_torch_order_parallel_per_alpha_nonoise.py.
 #
-# Single job, NO array: one design seed (1000), noise level 'none', 1 repeat per
-# voxel. Cost is dominated by the parallel candidate-grid build, same as one
+# SLURM array: one design seed per task (--array=0-9, see the script's
+# SLURM_ARRAY_TASK_ID handling), noise level 'none', 1 repeat per voxel. Cost is dominated by the parallel candidate-grid build, same as one
 # array task of batch_kim2024_style_duration_recovery_torch_order_per_alpha.slurm
 # (measured there: 27m29s on 16 CPUs, MaxRSS 4.2 GB), so the same --mem=16G and
 # --time=01:30:00 are reused. The noise-free recovery step itself is cheap
