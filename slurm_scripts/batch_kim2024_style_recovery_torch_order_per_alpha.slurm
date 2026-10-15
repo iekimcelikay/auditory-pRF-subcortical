@@ -5,8 +5,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=48G
-#SBATCH --time=12:00:00
+#SBATCH --mem=16G
+#SBATCH --time=00:45:00
 #SBATCH --array=0-9
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%A_%a.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_per_alpha_%A_%a.err
@@ -22,7 +22,13 @@
 #
 # --cpus-per-task controls the candidate-grid build's parallelism (see
 # kim2024_style_recovery_torch_order_parallel_per_alpha.py: N_WORKERS
-# defaults to $SLURM_CPUS_PER_TASK).
+# defaults to $SLURM_CPUS_PER_TASK) and the voxel-parallel recovery stage.
+#
+# SLURM array: one design seed per task (--array=0-9, via SLURM_ARRAY_TASK_ID).
+# Measured on array task 7693277_0 (16 CPUs): 10m04s elapsed, 61% CPU
+# efficiency, MaxRSS 2.7 GB. So --mem=16G (~6x headroom) and --time=00:45:00
+# (~4.5x). Hyperion CPU nodes have 48 cores / 94-257 GB, so 16G lets three
+# 16-CPU tasks share a node.
 
 echo "==================================="
 echo "Job started at $(date)"
