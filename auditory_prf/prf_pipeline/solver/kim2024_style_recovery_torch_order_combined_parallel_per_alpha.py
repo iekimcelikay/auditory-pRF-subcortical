@@ -86,10 +86,16 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery_torch_order_combine
     accuracy_table_path,
     accuracy_comparison_plot_path,
     sample_ground_truths_off_grid,
-    run_recovery,
 )
+from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
+from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
 
 N_WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+
+# SLURM array: task i runs design seed DESIGN_SEEDS[i] only (see the .slurm's --array).
+if "SLURM_ARRAY_TASK_ID" in os.environ:
+    DESIGN_SEEDS = [DESIGN_SEEDS[int(os.environ["SLURM_ARRAY_TASK_ID"])]]
+    N_DESIGN_SEEDS = len(DESIGN_SEEDS)
 
 _worker: dict = {}
 
@@ -112,15 +118,22 @@ def _build_one_candidate(params: tuple) -> np.ndarray:
     cf_index, pref_dur_ms, sigma_dur_ms, k_tau, w = params
     cf_index = int(cf_index)
 
-    per_seq_cache = _worker["per_seq_cache"]
+    # Single-entry cache: tasks arrive in chunks of exactly one
+    # (cf_index, pref_dur_ms, sigma_dur_ms) key (chunksize = n_k_tau * n_w, see
+    # build_candidate_grid_per_alpha), so a key is never revisited after its
+    # chunk ends. The previous unbounded dict never got a cross-chunk hit and
+    # grew until the pool closed (job 7687058 hit 33.5 GB MaxRSS -> OOM).
     cache_key = (cf_index, pref_dur_ms, sigma_dur_ms)
-    if cache_key not in per_seq_cache:
-        per_seq_cache[cache_key] = build_per_seq_trains_torch_order_fixed_reference(
-            _worker["raw_sequences"], cf_index, _worker["cf_list_hz"], _worker["alpha"],
-            TC_SILENCE_SEQ_ID, _worker["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
-            pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
-        )
-    per_seq, cf_hz = per_seq_cache[cache_key]
+    if _worker["per_seq_cache"].get("key") != cache_key:
+        _worker["per_seq_cache"] = {
+            "key": cache_key,
+            "value": build_per_seq_trains_torch_order_fixed_reference(
+                _worker["raw_sequences"], cf_index, _worker["cf_list_hz"], _worker["alpha"],
+                TC_SILENCE_SEQ_ID, _worker["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
+                pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
+            ),
+        }
+    per_seq, cf_hz = _worker["per_seq_cache"]["value"]
 
     tau_anchor_ms = cf_to_tau_ms(cf_hz, _worker["cf_range_hz"], TAU_RANGE_MS)
     tau_ms = k_tau * tau_anchor_ms
@@ -192,6 +205,77 @@ def build_candidate_grid_per_alpha(
     template_matrix /= np.where(norms == 0, 1.0, norms)
 
     return candidate_params, template_matrix
+
+
+def _recover_one_voxel(v_i: int, true_row: np.ndarray, state: dict) -> np.ndarray:
+    """Worker task: all MC noise repeats for one ground-truth voxel.
+
+    Returns
+    -------
+    np.ndarray, shape (N_NOISE_REPEATS, 6)
+        Recovered (cf_index, pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w) per repeat.
+    """
+    cf_index_f, pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w = true_row
+    cf_index = int(round(cf_index_f))
+    per_seq, cf_hz = build_per_seq_trains_torch_order_fixed_reference(
+        state["raw_sequences"], cf_index, state["cf_list_hz"], alpha, TC_SILENCE_SEQ_ID,
+        state["reference_table"], chunk_margin_ms=CHUNK_MARGIN_MS,
+        pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
+    )
+    gt_bold_per_run = forward_bold_runs(
+        per_seq, state["run_designs"], state["hrf_kernel"], cf_hz,
+        TOTAL_RUN_DUR_S, TR_S, SIGNAL_DT_S, w, tau_ms, tau_ms, RECTIFY, RHO,
+    )
+
+    n_timepoints = sum(len(r) for r in gt_bold_per_run)
+    measurements = np.empty((N_NOISE_REPEATS, n_timepoints), dtype=np.float32)
+    for rep in range(N_NOISE_REPEATS):
+        run_seeds = spawn_noise_seeds(MC_SEED, v_i, rep, n_runs=N_RUNS_RECOVERY)
+        measurements[rep, :] = draw_noisy_measurement(
+            gt_bold_per_run, state["noise_voxel"], TR_S, run_seeds,
+        )
+
+    best_idx = best_match_indices(state["template_matrix_norm"], measurements)
+    return state["candidate_params"][best_idx]
+
+
+def run_recovery(
+    raw_sequences: dict,
+    cf_list_hz: np.ndarray,
+    run_designs: list,
+    hrf_kernel: np.ndarray,
+    reference_table: np.ndarray,
+    candidate_params: np.ndarray,
+    template_matrix_norm: np.ndarray,
+    true_params: np.ndarray,
+    noise_voxel: str,
+    n_workers: int = N_WORKERS,
+) -> np.ndarray:
+    """Voxel-parallel version of
+    ``kim2024_style_recovery_torch_order_combined.run_recovery`` (same seeds,
+    same per-voxel procedure; repeats are scored in memory-bounded chunks --
+    the unchunked (483,840 x 10,000) float32 score matrix alone is ~19 GB).
+
+    Returns
+    -------
+    np.ndarray, shape (n_voxels, N_NOISE_REPEATS, 6)
+    """
+    n_voxels = true_params.shape[0]
+    recovered_params = np.empty((n_voxels, N_NOISE_REPEATS, 6), dtype=float)
+    state = dict(
+        raw_sequences=raw_sequences, cf_list_hz=cf_list_hz, run_designs=run_designs,
+        hrf_kernel=hrf_kernel, reference_table=reference_table,
+        candidate_params=candidate_params, template_matrix_norm=template_matrix_norm,
+        noise_voxel=noise_voxel,
+    )
+    for v_i, voxel_recovered in enumerate(map_voxels(_recover_one_voxel, true_params, state, n_workers)):
+        recovered_params[v_i] = voxel_recovered
+        cf_index_f, pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w = true_params[v_i]
+        bias = voxel_recovered.mean(axis=0) - [int(round(cf_index_f)), pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w]
+        print(f"  [{noise_voxel}] voxel {v_i+1}/{n_voxels}: true cf_index={int(round(cf_index_f))} "
+              f"pref_dur={pref_dur_ms:.1f} sigma_dur={sigma_dur_ms:.1f} alpha={alpha:.3f} "
+              f"tau={tau_ms:.1f} w={w:.3f} | bias={np.round(bias, 3)}", flush=True)
+    return recovered_params
 
 
 def main() -> None:

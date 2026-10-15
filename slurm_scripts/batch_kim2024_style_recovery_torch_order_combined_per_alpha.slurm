@@ -4,11 +4,12 @@
 #SBATCH --job-name=kim2024_style_recovery_torch_order_combined_per_alpha
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_combined_per_alpha_%j.out
-#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_combined_per_alpha_%j.err
+#SBATCH --array=0-9
+#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_combined_per_alpha_%A_%a.out
+#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_recovery_torch_order_combined_per_alpha_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=e.celikay@bcbl.eu
 
@@ -16,16 +17,12 @@
 # fixed per-CF reference -- see kim2024_style_recovery_torch_order_combined.py's
 # module docstring.
 #
-# --cpus-per-task=8 (not 16, unlike the AdapTrans-only torch-order job):
-# this worker DOES cache per_seq, but keyed by (cf_index, pref_dur_ms,
-# sigma_dur_ms) -- up to 30 CF x 8 pref_dur x 8 k_sigma = 1,920 cache
-# entries per worker within one alpha's pool, vs. the AdapTrans-only
-# worker's ~30-entry cache (keyed by cf_index alone). Given the duration-
-# only job's OOM-adjacent stall at 16 workers with NO caching at all (see
-# batch_kim2024_style_duration_recovery_per_alpha.slurm's comment), and
-# this worker's substantially larger per-worker cache footprint than that
-# one, halving workers up front here is the conservative choice until
-# proven otherwise at full scale.
+# SLURM array: one design seed per task (--array=0-9, see the script's
+# SLURM_ARRAY_TASK_ID handling). Job 7687058 (8 CPUs, unbounded per_seq cache)
+# was OOM-killed at 33.5 GB MaxRSS after 3h42m; the cache is now single-entry
+# and recovery is chunked over repeats, so 16 CPUs / 48 GB (~3 GB per worker)
+# should have headroom. Hyperion CPU nodes have 48 cores / 94-257 GB; QoS
+# regular allows 24 h. Lower --time once a task's real elapsed time is known.
 
 echo "==================================="
 echo "Job started at $(date)"

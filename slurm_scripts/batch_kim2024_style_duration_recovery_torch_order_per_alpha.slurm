@@ -4,11 +4,12 @@
 #SBATCH --job-name=kim2024_style_duration_recovery_torch_order_per_alpha
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%j.out
-#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%j.err
+#SBATCH --array=0-9
+#SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%A_%a.out
+#SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=e.celikay@bcbl.eu
 
@@ -16,13 +17,14 @@
 # per-CF reference calibration -- see
 # kim2024_style_duration_recovery_torch_order.py's module docstring.
 #
-# --cpus-per-task=8 (not 16): this worker does no per-candidate caching
-# (per_seq depends on cf_index+alpha+pref_dur+sigma_dur jointly here), and
-# the non-torch-order duration job (job 7674151/7674463) silently stalled
-# with zero surviving worker processes at 16 workers on this exact kind of
-# uncached worker -- see batch_kim2024_style_duration_recovery_per_alpha.slurm's
-# comment for the full incident. Halving workers up front here rather than
-# rediscovering the same failure mode again.
+# SLURM array: one design seed per task (--array=0-9, see the script's
+# SLURM_ARRAY_TASK_ID handling). Job 7686557 (8 CPUs) hit the 12 h limit
+# (MaxRSS 8.5 GB, ~1 GB per worker) at 43% CPU utilisation; recovery is now
+# voxel-parallel and chunked over repeats. 16 CPUs / 48 GB (~3 GB per worker)
+# keeps headroom over the ~1 GB/worker measured, given the earlier silent
+# stall at 16 workers/32 GB (job 7674151). Hyperion CPU nodes have 48 cores /
+# 94-257 GB; QoS regular allows 24 h. Lower --time once a task's real elapsed
+# time is known.
 
 echo "==================================="
 echo "Job started at $(date)"
