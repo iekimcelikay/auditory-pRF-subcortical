@@ -288,7 +288,8 @@ def draw_noisy_measurement(
         Clean BOLD, one array per run (same split used to build
         ``forward_bold_runs``'s concatenated output).
     voxel : str
-        ``PmNoise`` preset — ``'low'``, ``'mid'``, or ``'high'``.
+        ``PmNoise`` preset — ``'low'``, ``'mid'``, or ``'high'``; or
+        ``'none'`` to return the clean BOLD unchanged (noise-free test).
     tr_s : float
         Repetition time (s).
     run_seeds : list of int
@@ -301,6 +302,8 @@ def draw_noisy_measurement(
     np.ndarray, shape (n_runs * n_tr_per_run,)
         Noisy BOLD, concatenated across runs in the same order as input.
     """
+    if voxel == "none":
+        return np.concatenate(bold_clean_per_run)
     noisy_per_run = [
         apply_bold_noise(bold_run, PmNoise(voxel=voxel, seed=seed), tr_s)
         for bold_run, seed in zip(bold_clean_per_run, run_seeds)
