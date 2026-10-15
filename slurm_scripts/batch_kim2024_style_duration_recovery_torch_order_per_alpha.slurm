@@ -5,8 +5,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=48G
-#SBATCH --time=12:00:00
+#SBATCH --mem=16G
+#SBATCH --time=01:30:00
 #SBATCH --array=0-9
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%A_%a.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/kim2024_style_duration_recovery_torch_order_per_alpha_%A_%a.err
@@ -20,11 +20,10 @@
 # SLURM array: one design seed per task (--array=0-9, see the script's
 # SLURM_ARRAY_TASK_ID handling). Job 7686557 (8 CPUs) hit the 12 h limit
 # (MaxRSS 8.5 GB, ~1 GB per worker) at 43% CPU utilisation; recovery is now
-# voxel-parallel and chunked over repeats. 16 CPUs / 48 GB (~3 GB per worker)
-# keeps headroom over the ~1 GB/worker measured, given the earlier silent
-# stall at 16 workers/32 GB (job 7674151). Hyperion CPU nodes have 48 cores /
-# 94-257 GB; QoS regular allows 24 h. Lower --time once a task's real elapsed
-# time is known.
+# voxel-parallel and chunked over repeats. Measured on array task 7692950_0
+# (16 CPUs): 27m29s elapsed, 81% CPU efficiency, MaxRSS 4.2 GB. So --mem=16G
+# (~4x headroom) and --time=01:30:00 (~3x). Hyperion CPU nodes have 48 cores /
+# 94-257 GB, so 16G lets three 16-CPU tasks share a node.
 
 echo "==================================="
 echo "Job started at $(date)"
