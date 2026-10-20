@@ -61,8 +61,9 @@ from auditory_prf.prf_pipeline.solver.duration_recovery import (
     PARAM_NAMES,
     N_NOISE_REPEATS,
     PREF_DUR_GRID_MS,
-    SIGMA_DUR_GRID_MS,
-    sample_ground_truths_off_grid,
+    n_scaled_sigma_candidates,
+    sigma_grid_for_pref_dur,
+    draw_scaled_ground_truths,
     _UNUSED_W,
     _UNUSED_TAU_MS,
 )
@@ -75,6 +76,9 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     plot_noise_comparison,
 )
 from auditory_prf.prf_pipeline.solver.kim2024_style_duration_recovery import N_VOXELS
+# Ground-truth sampling: "on_grid" = random candidate-grid rows (noise-free recovery should be exact),
+# "off_grid" = continuous draws (also exposes grid-quantization error).
+GT_MODE = "off_grid"
 from auditory_prf.prf_pipeline.solver.kim2024_style_duration_recovery_torch_order import (
     RUN_DIR,
     candidate_grid_path,
@@ -135,14 +139,15 @@ def build_candidate_grid_per_alpha(
     """Per-alpha-pool parallel version of
     ``kim2024_style_duration_recovery_torch_order.build_candidate_grid``."""
     n_cf = len(cf_list_hz)
-    n_candidates = n_cf * len(PREF_DUR_GRID_MS) * len(SIGMA_DUR_GRID_MS) * len(ALPHA_GRID)
+    n_pref_sigma_pairs = n_scaled_sigma_candidates()
+    n_candidates = n_cf * n_pref_sigma_pairs * len(ALPHA_GRID)
     print(f"Building candidate grid with {n_workers} worker processes (fresh pool per alpha, torch order): "
-          f"{n_cf} CF x {len(PREF_DUR_GRID_MS)} pref_dur x {len(SIGMA_DUR_GRID_MS)} sigma_dur x "
+          f"{n_cf} CF x {n_pref_sigma_pairs} (pref_dur, scaled sigma_dur) pairs x "
           f"{len(ALPHA_GRID)} alpha = {n_candidates:,} candidates")
 
     candidate_params = np.empty((n_candidates, 4), dtype=float)
     template_matrix = None
-    chunk_size = len(PREF_DUR_GRID_MS) * len(SIGMA_DUR_GRID_MS)
+    chunk_size = n_pref_sigma_pairs
     idx = 0
     t_start = time.time()
 
@@ -151,7 +156,7 @@ def build_candidate_grid_per_alpha(
             (cf_index, pref_dur_ms, sigma_dur_ms)
             for cf_index in range(n_cf)
             for pref_dur_ms in PREF_DUR_GRID_MS
-            for sigma_dur_ms in SIGMA_DUR_GRID_MS
+            for sigma_dur_ms in sigma_grid_for_pref_dur(pref_dur_ms)
         ]
 
         with Pool(processes=n_workers, initializer=_init_worker,
@@ -315,7 +320,7 @@ def main() -> None:
         print(f"Candidate grid saved -> {cgp.resolve()}")
 
         gt_rng = np.random.default_rng(MC_SEED)
-        true_params = sample_ground_truths_off_grid(gt_rng, n_cf, N_VOXELS)
+        true_params = draw_scaled_ground_truths(GT_MODE, gt_rng, n_cf, N_VOXELS, candidate_params)
 
         recovered_by_noise = {}
         accuracy_by_noise = {}

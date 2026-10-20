@@ -39,6 +39,7 @@ N_VOXELS_NONOISE        = 100         # independent ground-truth voxels (cheap: 
 p.NOISE_VOXELS    = NOISE_VOXELS_NONOISE
 p.N_NOISE_REPEATS = N_NOISE_REPEATS_NONOISE
 p.N_VOXELS        = N_VOXELS_NONOISE
+p.GT_MODE         = "on_grid"   # step 1: ground truths ON the candidate grid; switch to "off_grid" after
 
 OUTPUT_DIR = Path("kim2024_style_duration_recovery_torch_order_nonoise_results")
 b.OUTPUT_DIR = OUTPUT_DIR

@@ -120,6 +120,86 @@ SIGMA_DUR_K_STEP = 0.1
 _sk_min, _sk_max = np.log2(SIGMA_DUR_MIN), np.log2(SIGMA_DUR_MAX)
 SIGMA_DUR_GRID_MS = (2 ** np.arange(_sk_min, _sk_max + SIGMA_DUR_K_STEP / 2, SIGMA_DUR_K_STEP)).tolist()
 
+# ── Duration-scaled sigma grid ───────────────────────────────────────────────
+# sigma_dur_ms = ratio * pref_dur_ms, clipped at SIGMA_DUR_CAP_MS, so tuning
+# width scales with the preferred duration (a 35 ms voxel cannot have a 250 ms
+# sigma). The ratio grid is log2-spaced with a step of ~SIGMA_RATIO_K_STEP that
+# spans [SIGMA_RATIO_MIN, SIGMA_RATIO_MAX] exactly.
+SIGMA_RATIO_MIN    = 0.2
+SIGMA_RATIO_MAX    = 0.5
+SIGMA_RATIO_K_STEP = 0.1
+SIGMA_DUR_CAP_MS   = 200.0
+
+
+def build_sigma_ratio_grid(
+    ratio_min: float = SIGMA_RATIO_MIN,
+    ratio_max: float = SIGMA_RATIO_MAX,
+    k_step: float = SIGMA_RATIO_K_STEP,
+) -> np.ndarray:
+    """Log2-spaced sigma/pref_dur ratios. Returns: (n_ratios,)"""
+    log2_span = np.log2(ratio_max) - np.log2(ratio_min)
+    n_ratios = int(np.ceil(log2_span / k_step - 1e-9)) + 1
+    return 2 ** np.linspace(np.log2(ratio_min), np.log2(ratio_max), n_ratios)
+
+
+def sigma_grid_for_pref_dur(
+    pref_dur_ms: float,
+    sigma_cap_ms: float = SIGMA_DUR_CAP_MS,
+) -> np.ndarray:
+    """Candidate sigma_dur_ms values for one preferred duration.
+
+    Returns: (n_sigma,), ascending, clipped at ``sigma_cap_ms`` with the
+    duplicates created by clipping removed (so the cap appears once).
+    """
+    sigma_dur_ms = np.minimum(build_sigma_ratio_grid() * pref_dur_ms, sigma_cap_ms)
+    return np.unique(sigma_dur_ms)
+
+
+def n_scaled_sigma_candidates() -> int:
+    """Number of (pref_dur, sigma_dur) pairs in the duration-scaled grid."""
+    return sum(len(sigma_grid_for_pref_dur(p)) for p in PREF_DUR_GRID_MS)
+
+
+def sample_ground_truths_off_grid_scaled(rng: np.random.Generator, n_cf: int, n_combos: int) -> np.ndarray:
+    """Off-grid ground truths with sigma tied to pref_dur.
+
+    pref_dur uniform in range; ratio log-uniform in [SIGMA_RATIO_MIN,
+    SIGMA_RATIO_MAX]; sigma = min(ratio * pref_dur, SIGMA_DUR_CAP_MS).
+
+    Returns: (n_combos, 4) columns ``[cf_index, pref_dur_ms, sigma_dur_ms, alpha]``.
+    """
+    cf_index  = rng.integers(0, n_cf, size=n_combos).astype(float)
+    pref_dur  = rng.uniform(PREF_DUR_GRID_MS[0], PREF_DUR_GRID_MS[-1], size=n_combos)
+    ratio     = 2 ** rng.uniform(np.log2(SIGMA_RATIO_MIN), np.log2(SIGMA_RATIO_MAX), size=n_combos)
+    sigma_dur = np.minimum(ratio * pref_dur, SIGMA_DUR_CAP_MS)
+    alpha     = 2 ** rng.uniform(np.log2(ALPHA_MIN), np.log2(ALPHA_MAX), size=n_combos)
+    return np.column_stack([cf_index, pref_dur, sigma_dur, alpha])
+
+
+def sample_ground_truths_on_candidate_grid(
+    rng: np.random.Generator, candidate_params: np.ndarray, n_combos: int,
+) -> np.ndarray:
+    """On-grid ground truths: random rows of the (duration-scaled) candidate grid.
+
+    Drawing rows (not per-axis values) keeps every ground truth an actual
+    candidate, so noise-free recovery should be exact.
+
+    Returns: (n_combos, 4) columns ``[cf_index, pref_dur_ms, sigma_dur_ms, alpha]``.
+    """
+    row_idx = rng.integers(0, len(candidate_params), size=n_combos)
+    return candidate_params[row_idx].copy()
+
+
+def draw_scaled_ground_truths(
+    gt_mode: str, rng: np.random.Generator, n_cf: int, n_combos: int, candidate_params: np.ndarray,
+) -> np.ndarray:
+    """Dispatch on ``gt_mode`` ('on_grid' | 'off_grid') for the duration-scaled grid."""
+    assert gt_mode in ("on_grid", "off_grid"), gt_mode
+    if gt_mode == "on_grid":
+        return sample_ground_truths_on_candidate_grid(rng, candidate_params, n_combos)
+    return sample_ground_truths_off_grid_scaled(rng, n_cf, n_combos)
+
+
 PARAM_NAMES = ["cf_index", "pref_dur_ms", "sigma_dur_ms", "alpha"]
 
 

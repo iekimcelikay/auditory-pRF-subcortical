@@ -18,11 +18,23 @@
 # kim2024_style_duration_recovery_torch_order_parallel_per_alpha_nonoise.py.
 #
 # SLURM array: one design seed per task (--array=0-9, see the script's
-# SLURM_ARRAY_TASK_ID handling), noise level 'none', 1 repeat per voxel. Cost is dominated by the parallel candidate-grid build, same as one
-# array task of batch_kim2024_style_duration_recovery_torch_order_per_alpha.slurm
-# (measured there: 27m29s on 16 CPUs, MaxRSS 4.2 GB), so the same --mem=16G and
-# --time=01:30:00 are reused. The noise-free recovery step itself is cheap
-# (100 voxels x 1 repeat). Adjust after the first run.
+# SLURM_ARRAY_TASK_ID handling), noise level 'none', 1 repeat per voxel.
+#
+# Candidate grid: sigma_dur is tied to pref_dur (sigma = ratio x pref_dur,
+# ratio 0.2-0.5, clipped at 200 ms; see SIGMA_RATIO_* / SIGMA_DUR_CAP_MS in
+# duration_recovery.py), so there are 117 (pref_dur, sigma) pairs instead of
+# 8 x 44 = 352. Ground truths are drawn ON the candidate grid (GT_MODE =
+# "on_grid" in the nonoise runner): noise-free recovery should then be exact,
+# and any miss is a model/identifiability issue, not grid quantization.
+# Switch to "off_grid" afterwards to measure quantization error.
+#
+# Cost is dominated by the parallel candidate-grid build. The full 352-pair
+# grid took 27m29s on 16 CPUs (MaxRSS 4.2 GB) in
+# batch_kim2024_style_duration_recovery_torch_order_per_alpha.slurm; the
+# 117-pair grid should take roughly a third of that (~9 min, not yet
+# measured). --mem=16G and --time=01:30:00 are kept as generous headroom --
+# tighten them after the first run. The noise-free recovery step itself is
+# cheap (100 voxels x 1 repeat).
 
 echo "==================================="
 echo "Job started at $(date)"

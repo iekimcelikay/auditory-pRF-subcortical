@@ -24,6 +24,9 @@
 # (16 CPUs): 27m29s elapsed, 81% CPU efficiency, MaxRSS 4.2 GB. So --mem=16G
 # (~4x headroom) and --time=01:30:00 (~3x). Hyperion CPU nodes have 48 cores /
 # 94-257 GB, so 16G lets three 16-CPU tasks share a node.
+# NOTE: the timing above was measured with the old 8 x 44 (pref_dur, sigma) grid. The grid now
+# uses duration-scaled sigmas (117 pairs; see duration_recovery.py SIGMA_RATIO_*), so expect a
+# shorter build (~1/3); the limits are kept as headroom until re-measured.
 
 echo "==================================="
 echo "Job started at $(date)"
