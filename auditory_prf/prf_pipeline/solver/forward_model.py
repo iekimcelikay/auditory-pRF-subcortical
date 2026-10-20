@@ -279,6 +279,7 @@ def draw_noisy_measurement(
     voxel: str,
     tr_s: float,
     run_seeds: list,
+    jitter=None,
 ) -> np.ndarray:
     """Add one independent ``PmNoise`` draw per run, then concatenate.
 
@@ -296,6 +297,10 @@ def draw_noisy_measurement(
         One integer seed per run, length ``len(bold_clean_per_run)`` —
         independent across runs and across Monte Carlo repeats (see
         ``spawn_noise_seeds``).
+    jitter : array_like of length 1-3 or None, optional
+        ``PmNoise`` jitter [frequency, amplitude, phase] (Gaussian SD as a
+        fraction of nominal, applied to the periodic noise components).
+        ``None`` keeps the preset default (no jitter).
 
     Returns
     -------
@@ -305,7 +310,7 @@ def draw_noisy_measurement(
     if voxel == "none":
         return np.concatenate(bold_clean_per_run)
     noisy_per_run = [
-        apply_bold_noise(bold_run, PmNoise(voxel=voxel, seed=seed), tr_s)
+        apply_bold_noise(bold_run, PmNoise(voxel=voxel, seed=seed, jitter=jitter), tr_s)
         for bold_run, seed in zip(bold_clean_per_run, run_seeds)
     ]
     return np.concatenate(noisy_per_run)
