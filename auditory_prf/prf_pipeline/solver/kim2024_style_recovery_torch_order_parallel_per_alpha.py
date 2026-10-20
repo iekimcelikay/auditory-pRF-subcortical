@@ -87,6 +87,25 @@ from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indice
 
 N_WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
 
+# Ground-truth sampling: "on_grid" = random candidate-grid rows (noise-free recovery should be exact),
+# "off_grid" = continuous draws (also exposes grid-quantization error).
+GT_MODE = "off_grid"
+
+
+def draw_ground_truths(gt_mode: str, rng: np.random.Generator, n_cf: int, n_voxels: int,
+                       candidate_params: np.ndarray) -> np.ndarray:
+    """Draw ground-truth (cf_index, tau_ms, alpha, w) rows.
+
+    Returns
+    -------
+    np.ndarray, shape (n_voxels, 4)
+    """
+    assert gt_mode in ("on_grid", "off_grid"), gt_mode
+    if gt_mode == "on_grid":
+        rows = rng.integers(0, len(candidate_params), size=n_voxels)
+        return candidate_params[rows].copy()
+    return sample_ground_truths_off_grid(rng, n_cf, n_voxels)
+
 # SLURM array: task i runs design seed DESIGN_SEEDS[i] only (see the .slurm's --array).
 if "SLURM_ARRAY_TASK_ID" in os.environ:
     DESIGN_SEEDS = [DESIGN_SEEDS[int(os.environ["SLURM_ARRAY_TASK_ID"])]]
@@ -314,7 +333,8 @@ def main() -> None:
         print(f"Candidate grid saved -> {cgp.resolve()}")
 
         gt_rng = np.random.default_rng(MC_SEED)
-        true_params = sample_ground_truths_off_grid(gt_rng, n_cf, N_VOXELS)
+        true_params = draw_ground_truths(GT_MODE, gt_rng, n_cf, N_VOXELS, candidate_params)
+        assert true_params.shape == (N_VOXELS, 4), true_params.shape
 
         recovered_by_noise = {}
         accuracy_by_noise = {}
