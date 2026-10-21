@@ -8,11 +8,9 @@ per alpha, same rationale as ``grid_recovery_parallel_per_alpha.py``.
 Per-worker caching: ``per_seq`` depends on (cf_index, alpha, pref_dur_ms,
 sigma_dur_ms) -- NOT on tau_ms/w, which only affect the later AdapTrans+HRF
 stage -- so each worker caches ``per_seq`` keyed by (cf_index, pref_dur_ms,
-sigma_dur_ms) within one alpha's pool, reused across every (k_tau, w)
-combination. ``cf_to_tau_ms`` is cheap pure arithmetic, so it's recomputed
-in both the main process (to record candidate_params) and inside each
-worker (to build the actual candidate) rather than threading it through
-the task tuple.
+sigma_dur_ms) within one alpha's pool, reused across every (tau, w)
+combination. Tau is an absolute grid value (no CF anchor), carried directly
+in the task tuple.
 
 Usage (from project root, request multiple CPUs via SLURM — see
 slurm_scripts/batch_kim2024_style_recovery_torch_order_combined_per_alpha.slurm):
@@ -27,7 +25,6 @@ import numpy as np
 
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import generate_run_design
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import cf_to_tau_ms
 from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import (
     _make_tonecloud_seq_id_fn,
     TC_SILENCE_SEQ_ID,
@@ -76,9 +73,8 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery_torch_order_combined import (
     PARAM_NAMES,
     K_SIGMA_GRID,
-    K_TAU_GRID,
+    TAU_GRID_MS,
     W_GRID,
-    TAU_RANGE_MS,
     RUN_DIR,
     candidate_grid_path,
     recovery_output_paths,
@@ -134,12 +130,12 @@ def _init_worker(raw_sequences: dict, cf_list_hz: np.ndarray, alpha: float,
 
 
 def _build_one_candidate(params: tuple) -> np.ndarray:
-    """Worker task: forward-simulate one (cf_index, pref_dur_ms, sigma_dur_ms, k_tau, w) candidate."""
-    cf_index, pref_dur_ms, sigma_dur_ms, k_tau, w = params
+    """Worker task: forward-simulate one (cf_index, pref_dur_ms, sigma_dur_ms, tau_ms, w) candidate."""
+    cf_index, pref_dur_ms, sigma_dur_ms, tau_ms, w = params
     cf_index = int(cf_index)
 
     # Single-entry cache: tasks arrive in chunks of exactly one
-    # (cf_index, pref_dur_ms, sigma_dur_ms) key (chunksize = n_k_tau * n_w, see
+    # (cf_index, pref_dur_ms, sigma_dur_ms) key (chunksize = n_tau * n_w, see
     # build_candidate_grid_per_alpha), so a key is never revisited after its
     # chunk ends. The previous unbounded dict never got a cross-chunk hit and
     # grew until the pool closed (job 7687058 hit 33.5 GB MaxRSS -> OOM).
@@ -154,9 +150,6 @@ def _build_one_candidate(params: tuple) -> np.ndarray:
             ),
         }
     per_seq, cf_hz = _worker["per_seq_cache"]["value"]
-
-    tau_anchor_ms = cf_to_tau_ms(cf_hz, _worker["cf_range_hz"], TAU_RANGE_MS)
-    tau_ms = k_tau * tau_anchor_ms
 
     bold_per_run = forward_bold_runs(
         per_seq, _worker["run_designs"], _worker["hrf_kernel"], cf_hz,
@@ -178,25 +171,25 @@ def build_candidate_grid_per_alpha(
     ``kim2024_style_recovery_torch_order_combined.build_candidate_grid``."""
     n_cf = len(cf_list_hz)
     n_candidates = (n_cf * len(PREF_DUR_GRID_MS) * len(K_SIGMA_GRID)
-                    * len(ALPHA_GRID) * len(K_TAU_GRID) * len(W_GRID))
+                    * len(ALPHA_GRID) * len(TAU_GRID_MS) * len(W_GRID))
     print(f"Building candidate grid with {n_workers} worker processes (fresh pool per alpha, "
           f"torch order, combined AdapTrans+duration): {n_cf} CF x {len(PREF_DUR_GRID_MS)} pref_dur x "
-          f"{len(K_SIGMA_GRID)} k_sigma x {len(ALPHA_GRID)} alpha x {len(K_TAU_GRID)} k_tau x "
+          f"{len(K_SIGMA_GRID)} k_sigma x {len(ALPHA_GRID)} alpha x {len(TAU_GRID_MS)} tau x "
           f"{len(W_GRID)} w = {n_candidates:,} candidates")
 
     candidate_params = np.empty((n_candidates, 6), dtype=float)
     template_matrix = None
-    chunk_size = len(K_TAU_GRID) * len(W_GRID)   # one (cf_index, pref_dur, k_sigma)'s worth
+    chunk_size = len(TAU_GRID_MS) * len(W_GRID)   # one (cf_index, pref_dur, k_sigma)'s worth
     idx = 0
     t_start = time.time()
 
     for alpha in ALPHA_GRID:
         candidate_param_list = [
-            (cf_index, pref_dur_ms, k_sigma * pref_dur_ms, k_tau, w)
+            (cf_index, pref_dur_ms, k_sigma * pref_dur_ms, tau_ms, w)
             for cf_index in range(n_cf)
             for pref_dur_ms in PREF_DUR_GRID_MS
             for k_sigma in K_SIGMA_GRID
-            for k_tau in K_TAU_GRID
+            for tau_ms in TAU_GRID_MS
             for w in W_GRID
         ]
 
@@ -208,10 +201,7 @@ def build_candidate_grid_per_alpha(
             ):
                 if template_matrix is None:
                     template_matrix = np.empty((n_candidates, len(template)), dtype=np.float32)
-                cf_index, pref_dur_ms, sigma_dur_ms, k_tau, w = candidate_param_list[local_i]
-                cf_hz = float(cf_list_hz[int(cf_index)])
-                tau_anchor_ms = cf_to_tau_ms(cf_hz, cf_range_hz, TAU_RANGE_MS)
-                tau_ms = k_tau * tau_anchor_ms
+                cf_index, pref_dur_ms, sigma_dur_ms, tau_ms, w = candidate_param_list[local_i]
                 template_matrix[idx, :] = template
                 candidate_params[idx] = (cf_index, pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w)
                 idx += 1

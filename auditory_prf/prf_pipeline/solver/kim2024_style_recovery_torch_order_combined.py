@@ -12,17 +12,15 @@ tau_ms, w]`` — 6 free dimensions, but ``sigma_dur_ms`` and ``tau_ms`` are
 each parameterized as a RATIO against a natural anchor rather than swept as
 independent absolute ranges (per project discussion — the previous
 independent-range grids allowed nonsensical combinations, e.g. a 20ms
-preferred duration paired with a 400ms tuning width):
+preferred duration paired with a 400ms tuning width). Tau is the exception:
+it is a fully independent absolute dimension (no CF anchor):
 
   - ``sigma_dur_ms = k_sigma * pref_dur_ms`` — relative tuning width,
     ``k_sigma`` in [0.25, 2.0] (quarter to double the preferred duration).
-  - ``tau_ms = k_tau * cf_to_tau_ms(cf_hz, cf_range_hz, TAU_RANGE_MS)`` —
-    tau stays genuinely free/recovered (via k_tau), but anchored to each
-    CF's own Willmore-shaped natural timescale instead of an absolute,
-    CF-independent range — so tau is different for every CF by
-    construction, not just scaled uniformly.
+  - ``tau_ms`` is swept directly over ``TAU_GRID_MS`` (20-400 ms, same grid
+    as the non-combined recovery), independent of CF.
 
-Candidate grid: 30 CF x 8 pref_dur x 8 k_sigma x 7 alpha x 9 k_tau x 4 w =
+Candidate grid: 30 CF x 8 pref_dur x 8 k_sigma x 7 alpha x 9 tau x 4 w =
 483,840 candidates (~6.5x duration_recovery.py's 73,920, far more tractable
 than the ~1.09M a naive full-resolution 6D grid would have been).
 
@@ -30,7 +28,7 @@ Per-worker caching note (serial version, see the eventual
 ..._parallel_per_alpha.py for the real benefit): ``per_seq`` depends on
 (cf_index, alpha, pref_dur_ms, sigma_dur_ms) -- NOT on tau_ms/w, which only
 affect the later AdapTrans+HRF stage -- so it's rebuilt only when any of
-those four change, not on every (k_tau, w) combination.
+those four change, not on every (tau, w) combination.
 
 Usage (from project root):
     conda run --no-capture-output -n subcorticalSTRF3.9 python -m auditory_prf.prf_pipeline.solver.kim2024_style_recovery_torch_order_combined
@@ -44,7 +42,6 @@ import numpy as np
 
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import generate_run_design
-from auditory_prf.prf_pipeline.adaptrans_onoff_filters import cf_to_tau_ms
 from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import (
     _make_tonecloud_seq_id_fn,
     TC_SILENCE_SEQ_ID,
@@ -86,6 +83,7 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     ALPHA_MIN,
     ALPHA_MAX,
     ALPHA_GRID,
+    TAU_ON_GRID_MS,
 )
 from auditory_prf.prf_pipeline.solver.duration_recovery import PREF_DUR_GRID_MS
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
@@ -104,12 +102,9 @@ PARAM_NAMES = ["cf_index", "pref_dur_ms", "sigma_dur_ms", "alpha", "tau_ms", "w"
 K_SIGMA_MIN, K_SIGMA_MAX = 0.25, 2.0
 K_SIGMA_GRID = np.geomspace(K_SIGMA_MIN, K_SIGMA_MAX, 8).tolist()
 
-# Relative AdapTrans time constant: tau_ms = K_TAU * cf_to_tau_ms(cf_hz, ...)
-# (per project discussion). Lowest CF -> 400ms anchor, highest CF -> 20ms
-# anchor (TAU_RANGE_MS), same as kim2024_style_recovery_torch_order_willmore_cf.py.
-K_TAU_MIN, K_TAU_MAX = 0.25, 2.0
-K_TAU_GRID = np.geomspace(K_TAU_MIN, K_TAU_MAX, 9).tolist()
-TAU_RANGE_MS = (20.0, 400.0)
+# AdapTrans time constant: fully independent of CF (no anchor), swept directly.
+TAU_GRID_MS = list(TAU_ON_GRID_MS)
+TAU_MIN_MS, TAU_MAX_MS = float(min(TAU_GRID_MS)), float(max(TAU_GRID_MS))
 
 W_GRID = [0.7, 0.75, 0.8, 0.85]
 W_MIN, W_MAX = 0.7, 0.85
@@ -150,8 +145,8 @@ def sample_ground_truths_off_grid(
 ) -> np.ndarray:
     """Draw ground-truth (cf_index, pref_dur_ms, sigma_dur_ms, alpha, tau_ms,
     w) combos, off-grid (continuous) within each dimension's range.
-    ``sigma_dur_ms``/``tau_ms`` are derived from continuously-sampled
-    ``k_sigma``/``k_tau`` ratios, not sampled as independent absolute values
+    ``sigma_dur_ms`` is derived from a continuously-sampled ``k_sigma`` ratio;
+    ``tau_ms`` is log-uniform over [TAU_MIN_MS, TAU_MAX_MS], independent of CF
     (see module docstring).
 
     Returns
@@ -163,10 +158,7 @@ def sample_ground_truths_off_grid(
     k_sigma = 2 ** rng.uniform(np.log2(K_SIGMA_MIN), np.log2(K_SIGMA_MAX), size=n_combos)
     sigma_dur_ms = k_sigma * pref_dur_ms
     alpha = 2 ** rng.uniform(np.log2(ALPHA_MIN), np.log2(ALPHA_MAX), size=n_combos)
-    k_tau = 2 ** rng.uniform(np.log2(K_TAU_MIN), np.log2(K_TAU_MAX), size=n_combos)
-    cf_hz_arr = cf_list_hz[cf_index_f.astype(int)]
-    tau_anchor_ms = np.array([cf_to_tau_ms(float(hz), cf_range_hz, TAU_RANGE_MS) for hz in cf_hz_arr])
-    tau_ms = k_tau * tau_anchor_ms
+    tau_ms = 2 ** rng.uniform(np.log2(TAU_MIN_MS), np.log2(TAU_MAX_MS), size=n_combos)
     w = rng.uniform(W_MIN, W_MAX, size=n_combos)
     return np.column_stack([cf_index_f, pref_dur_ms, sigma_dur_ms, alpha, tau_ms, w])
 
@@ -180,8 +172,8 @@ def build_candidate_grid(
     cf_range_hz: tuple,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Forward-simulate every (cf_index, pref_dur_ms, sigma_dur_ms, alpha,
-    tau_ms, w) candidate -- sigma_dur_ms/tau_ms derived from K_SIGMA_GRID/
-    K_TAU_GRID ratios (see module docstring), not independent grid axes.
+    tau_ms, w) candidate -- sigma_dur_ms derived from K_SIGMA_GRID ratio,
+    tau_ms swept directly over TAU_GRID_MS (see module docstring).
 
     Returns
     -------
@@ -190,10 +182,10 @@ def build_candidate_grid(
     """
     n_cf = len(cf_list_hz)
     n_candidates = (n_cf * len(PREF_DUR_GRID_MS) * len(K_SIGMA_GRID)
-                    * len(ALPHA_GRID) * len(K_TAU_GRID) * len(W_GRID))
+                    * len(ALPHA_GRID) * len(TAU_GRID_MS) * len(W_GRID))
     print(f"Building candidate grid (torch order, combined AdapTrans+duration): "
           f"{n_cf} CF x {len(PREF_DUR_GRID_MS)} pref_dur x {len(K_SIGMA_GRID)} k_sigma x "
-          f"{len(ALPHA_GRID)} alpha x {len(K_TAU_GRID)} k_tau x {len(W_GRID)} w "
+          f"{len(ALPHA_GRID)} alpha x {len(TAU_GRID_MS)} tau x {len(W_GRID)} w "
           f"= {n_candidates:,} candidates")
 
     candidate_params = np.empty((n_candidates, 6), dtype=float)
@@ -203,8 +195,6 @@ def build_candidate_grid(
 
     for alpha in ALPHA_GRID:
         for cf_index in range(n_cf):
-            cf_hz_for_anchor = float(cf_list_hz[cf_index])
-            tau_anchor_ms = cf_to_tau_ms(cf_hz_for_anchor, cf_range_hz, TAU_RANGE_MS)
             for pref_dur_ms in PREF_DUR_GRID_MS:
                 for k_sigma in K_SIGMA_GRID:
                     sigma_dur_ms = k_sigma * pref_dur_ms
@@ -213,8 +203,7 @@ def build_candidate_grid(
                         population_pool, chunk_margin_ms=CHUNK_MARGIN_MS,
                         pref_dur_ms=pref_dur_ms, sigma_dur_ms=sigma_dur_ms,
                     )
-                    for k_tau in K_TAU_GRID:
-                        tau_ms = k_tau * tau_anchor_ms
+                    for tau_ms in TAU_GRID_MS:
                         for w in W_GRID:
                             bold_per_run = forward_bold_runs(
                                 per_seq, run_designs, hrf_kernel, cf_hz,
