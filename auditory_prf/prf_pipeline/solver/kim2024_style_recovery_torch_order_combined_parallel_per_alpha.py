@@ -60,7 +60,7 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     N_NOISE_REPEATS,
     ALPHA_GRID,
 )
-from auditory_prf.prf_pipeline.solver.duration_recovery import PREF_DUR_GRID_MS
+from auditory_prf.prf_pipeline.solver.duration_recovery import PREF_DUR_GRID_MS, sigma_grid_for_pref_dur
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     N_VOXELS,
     compute_accuracy_correlations,
@@ -72,7 +72,6 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
 )
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery_torch_order_combined import (
     PARAM_NAMES,
-    K_SIGMA_GRID,
     TAU_GRID_MS,
     W_GRID,
     RUN_DIR,
@@ -170,25 +169,26 @@ def build_candidate_grid_per_alpha(
     """Per-alpha-pool parallel version of
     ``kim2024_style_recovery_torch_order_combined.build_candidate_grid``."""
     n_cf = len(cf_list_hz)
-    n_candidates = (n_cf * len(PREF_DUR_GRID_MS) * len(K_SIGMA_GRID)
+    n_pref_sigma_pairs = sum(len(sigma_grid_for_pref_dur(p)) for p in PREF_DUR_GRID_MS)
+    n_candidates = (n_cf * n_pref_sigma_pairs
                     * len(ALPHA_GRID) * len(TAU_GRID_MS) * len(W_GRID))
     print(f"Building candidate grid with {n_workers} worker processes (fresh pool per alpha, "
-          f"torch order, combined AdapTrans+duration): {n_cf} CF x {len(PREF_DUR_GRID_MS)} pref_dur x "
-          f"{len(K_SIGMA_GRID)} k_sigma x {len(ALPHA_GRID)} alpha x {len(TAU_GRID_MS)} tau x "
+          f"torch order, combined AdapTrans+duration): {n_cf} CF x "
+          f"{n_pref_sigma_pairs} (pref_dur, sigma_dur) pairs x {len(ALPHA_GRID)} alpha x {len(TAU_GRID_MS)} tau x "
           f"{len(W_GRID)} w = {n_candidates:,} candidates")
 
     candidate_params = np.empty((n_candidates, 6), dtype=float)
     template_matrix = None
-    chunk_size = len(TAU_GRID_MS) * len(W_GRID)   # one (cf_index, pref_dur, k_sigma)'s worth
+    chunk_size = len(TAU_GRID_MS) * len(W_GRID)   # one (cf_index, pref_dur, sigma_dur)'s worth
     idx = 0
     t_start = time.time()
 
     for alpha in ALPHA_GRID:
         candidate_param_list = [
-            (cf_index, pref_dur_ms, k_sigma * pref_dur_ms, tau_ms, w)
+            (cf_index, pref_dur_ms, sigma_dur_ms, tau_ms, w)
             for cf_index in range(n_cf)
             for pref_dur_ms in PREF_DUR_GRID_MS
-            for k_sigma in K_SIGMA_GRID
+            for sigma_dur_ms in sigma_grid_for_pref_dur(pref_dur_ms)
             for tau_ms in TAU_GRID_MS
             for w in W_GRID
         ]

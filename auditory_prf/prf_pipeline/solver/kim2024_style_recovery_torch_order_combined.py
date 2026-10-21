@@ -13,14 +13,16 @@ each parameterized as a RATIO against a natural anchor rather than swept as
 independent absolute ranges (per project discussion — the previous
 independent-range grids allowed nonsensical combinations, e.g. a 20ms
 preferred duration paired with a 400ms tuning width). Tau is the exception:
-it is a fully independent absolute dimension (no CF anchor):
+it is a fully independent absolute dimension (no CF anchor). Pref-dur and
+sigma grids are identical to ``duration_recovery.py``:
 
-  - ``sigma_dur_ms = k_sigma * pref_dur_ms`` — relative tuning width,
-    ``k_sigma`` in [0.25, 2.0] (quarter to double the preferred duration).
+  - ``sigma_dur_ms = min(ratio * pref_dur_ms, SIGMA_DUR_CAP_MS)`` — ratio
+    in [SIGMA_RATIO_MIN, SIGMA_RATIO_MAX] = [0.2, 0.5], log2 step 0.1,
+    capped at 200 ms (``sigma_grid_for_pref_dur``).
   - ``tau_ms`` is swept directly over ``TAU_GRID_MS`` (20-400 ms, same grid
     as the non-combined recovery), independent of CF.
 
-Candidate grid: 30 CF x 8 pref_dur x 8 k_sigma x 7 alpha x 9 tau x 4 w =
+Candidate grid: 30 CF x 117 (pref_dur, sigma) pairs x 7 alpha x 9 tau x 4 w =
 483,840 candidates (~6.5x duration_recovery.py's 73,920, far more tractable
 than the ~1.09M a naive full-resolution 6D grid would have been).
 
@@ -85,7 +87,13 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     ALPHA_GRID,
     TAU_ON_GRID_MS,
 )
-from auditory_prf.prf_pipeline.solver.duration_recovery import PREF_DUR_GRID_MS
+from auditory_prf.prf_pipeline.solver.duration_recovery import (
+    PREF_DUR_GRID_MS,
+    SIGMA_RATIO_MIN,
+    SIGMA_RATIO_MAX,
+    SIGMA_DUR_CAP_MS,
+    sigma_grid_for_pref_dur,
+)
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     N_VOXELS,
     compute_accuracy_correlations,
@@ -98,9 +106,8 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
 
 PARAM_NAMES = ["cf_index", "pref_dur_ms", "sigma_dur_ms", "alpha", "tau_ms", "w"]
 
-# Relative tuning width: sigma_dur_ms = K_SIGMA * pref_dur_ms (per project discussion).
-K_SIGMA_MIN, K_SIGMA_MAX = 0.25, 2.0
-K_SIGMA_GRID = np.geomspace(K_SIGMA_MIN, K_SIGMA_MAX, 8).tolist()
+# Sigma grid: same duration-scaled grid as duration_recovery.py
+# (sigma_grid_for_pref_dur: ratio 0.2-0.5 x pref_dur, capped at SIGMA_DUR_CAP_MS).
 
 # AdapTrans time constant: fully independent of CF (no anchor), swept directly.
 TAU_GRID_MS = list(TAU_ON_GRID_MS)
@@ -145,7 +152,8 @@ def sample_ground_truths_off_grid(
 ) -> np.ndarray:
     """Draw ground-truth (cf_index, pref_dur_ms, sigma_dur_ms, alpha, tau_ms,
     w) combos, off-grid (continuous) within each dimension's range.
-    ``sigma_dur_ms`` is derived from a continuously-sampled ``k_sigma`` ratio;
+    ``sigma_dur_ms = min(ratio * pref_dur_ms, SIGMA_DUR_CAP_MS)`` with ratio
+    log-uniform in [SIGMA_RATIO_MIN, SIGMA_RATIO_MAX] (as duration_recovery.py);
     ``tau_ms`` is log-uniform over [TAU_MIN_MS, TAU_MAX_MS], independent of CF
     (see module docstring).
 
@@ -155,8 +163,8 @@ def sample_ground_truths_off_grid(
     """
     cf_index_f = rng.integers(0, n_cf, size=n_combos).astype(float)
     pref_dur_ms = rng.uniform(PREF_DUR_GRID_MS[0], PREF_DUR_GRID_MS[-1], size=n_combos)
-    k_sigma = 2 ** rng.uniform(np.log2(K_SIGMA_MIN), np.log2(K_SIGMA_MAX), size=n_combos)
-    sigma_dur_ms = k_sigma * pref_dur_ms
+    sigma_ratio = 2 ** rng.uniform(np.log2(SIGMA_RATIO_MIN), np.log2(SIGMA_RATIO_MAX), size=n_combos)
+    sigma_dur_ms = np.minimum(sigma_ratio * pref_dur_ms, SIGMA_DUR_CAP_MS)
     alpha = 2 ** rng.uniform(np.log2(ALPHA_MIN), np.log2(ALPHA_MAX), size=n_combos)
     tau_ms = 2 ** rng.uniform(np.log2(TAU_MIN_MS), np.log2(TAU_MAX_MS), size=n_combos)
     w = rng.uniform(W_MIN, W_MAX, size=n_combos)
@@ -172,7 +180,7 @@ def build_candidate_grid(
     cf_range_hz: tuple,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Forward-simulate every (cf_index, pref_dur_ms, sigma_dur_ms, alpha,
-    tau_ms, w) candidate -- sigma_dur_ms derived from K_SIGMA_GRID ratio,
+    tau_ms, w) candidate -- sigma_dur_ms from sigma_grid_for_pref_dur(pref_dur),
     tau_ms swept directly over TAU_GRID_MS (see module docstring).
 
     Returns
@@ -181,10 +189,11 @@ def build_candidate_grid(
     template_matrix_norm : np.ndarray, shape (n_candidates, n_timepoints)
     """
     n_cf = len(cf_list_hz)
-    n_candidates = (n_cf * len(PREF_DUR_GRID_MS) * len(K_SIGMA_GRID)
+    n_pref_sigma_pairs = sum(len(sigma_grid_for_pref_dur(p)) for p in PREF_DUR_GRID_MS)
+    n_candidates = (n_cf * n_pref_sigma_pairs
                     * len(ALPHA_GRID) * len(TAU_GRID_MS) * len(W_GRID))
     print(f"Building candidate grid (torch order, combined AdapTrans+duration): "
-          f"{n_cf} CF x {len(PREF_DUR_GRID_MS)} pref_dur x {len(K_SIGMA_GRID)} k_sigma x "
+          f"{n_cf} CF x {n_pref_sigma_pairs} (pref_dur, sigma_dur) pairs x "
           f"{len(ALPHA_GRID)} alpha x {len(TAU_GRID_MS)} tau x {len(W_GRID)} w "
           f"= {n_candidates:,} candidates")
 
@@ -196,8 +205,7 @@ def build_candidate_grid(
     for alpha in ALPHA_GRID:
         for cf_index in range(n_cf):
             for pref_dur_ms in PREF_DUR_GRID_MS:
-                for k_sigma in K_SIGMA_GRID:
-                    sigma_dur_ms = k_sigma * pref_dur_ms
+                for sigma_dur_ms in sigma_grid_for_pref_dur(pref_dur_ms):
                     per_seq, cf_hz = build_per_seq_trains_torch_order_fixed_reference(
                         raw_sequences, cf_index, cf_list_hz, alpha, TC_SILENCE_SEQ_ID,
                         population_pool, chunk_margin_ms=CHUNK_MARGIN_MS,
