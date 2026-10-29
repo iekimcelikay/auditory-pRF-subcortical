@@ -1,8 +1,11 @@
 
 # Created by: Ekim Celikay
 
+import warnings
+
 import numpy as np
 from scipy.signal import firwin, filtfilt
+from scipy.integrate import cumulative_trapezoid
 
 from auditory_prf.utils.thorns_compat import set_dbspl
 
@@ -58,6 +61,133 @@ class SoundGen:
         normalized_sound = normalized_sound / (max_amplitude + 0.01)
 
         return normalized_sound
+
+    def fm_sweep_maker(self,
+                       freq_fn_hz,
+                       tone_duration,
+                       dbspl=60,
+                       start_phase_rad=0.0,
+                       ):
+        """
+        Generate a frequency-modulated sweep, s(T) = sin(2*pi*int_0^T f(t) dt).
+
+        The phase is the cumulative (trapezoidal) integral of the instantaneous
+        frequency, so f(t) is the true instantaneous frequency of the output.
+
+        :param freq_fn_hz: Vectorised callable f(time_s) -> instantaneous
+            frequency in Hz; takes an array (n_samples,) of times in seconds
+            and returns an array of the same shape.
+        :param tone_duration: Duration in seconds.
+        :param dbspl: Desired dbspl (loudness) level (default: 60 dB).
+        :param start_phase_rad: Phase offset at t=0 in radians.
+        :return: sound: np.ndarray, shape (n_samples,).
+        """
+        n_samples = int(self.sample_rate * tone_duration)
+        time_s = np.arange(n_samples) / self.sample_rate
+        inst_freq_hz = np.asarray(freq_fn_hz(time_s), dtype=np.float64)
+        assert inst_freq_hz.shape == time_s.shape, \
+            "freq_fn_hz must return one frequency per time sample"
+        assert np.all(inst_freq_hz < self.sample_rate / 2), \
+            "instantaneous frequency exceeds Nyquist"
+
+        phase_rad = 2 * np.pi * cumulative_trapezoid(inst_freq_hz,
+                                                     time_s,
+                                                     initial=0.0)
+        sound = np.sin(phase_rad + start_phase_rad)
+
+        # Same level calibration as sound_maker
+        normalized_sound = set_dbspl(sound, dbspl)
+        max_amplitude = 0.2753
+        return normalized_sound / (max_amplitude + 0.01)
+
+    @staticmethod
+    def rounded_triangle_position(cycle_phase, round_fraction, n_table=4096):
+        """
+        Triangle path in [0, 1] with rounded corners.
+
+        The triangle is smoothed (circular Hann window) over round_fraction
+        of one cycle, then rescaled so the path still spans exactly [0, 1].
+        round_fraction=0 is the pure triangle; the middle of each rise and
+        fall keeps the triangle's constant speed.
+
+        :param cycle_phase: np.ndarray in [0, 1).
+        :param round_fraction: Smoothing width as a fraction of one cycle.
+        :return: np.ndarray in [0, 1], same shape as cycle_phase.
+        """
+        grid = np.arange(n_table) / n_table
+        triangle = 1.0 - np.abs(2.0 * grid - 1.0)
+        kernel_len = int(round(round_fraction * n_table))
+        if kernel_len < 1:
+            smooth = triangle
+        else:
+            kernel = np.hanning(kernel_len + 2)[1:-1]
+            kernel = kernel / kernel.sum()
+            padded = np.concatenate([triangle[-kernel_len:], triangle,
+                                     triangle[:kernel_len]])
+            smooth = np.convolve(padded, kernel, mode="same")[kernel_len:-kernel_len]
+            smooth = (smooth - smooth.min()) / (smooth.max() - smooth.min())
+        return np.interp(cycle_phase, np.append(grid, 1.0),
+                         np.append(smooth, smooth[0]))
+
+    @staticmethod
+    def updown_freq_hz(cycle_phase, low_hz, high_hz, shape, spacing,
+                       round_fraction=None):
+        """
+        Map the position within one up/down cycle to a frequency.
+
+        :param cycle_phase: np.ndarray in [0, 1); 0 = start of a cycle,
+            1 = end. Returns low_hz at 0 and high_hz at 0.5, and comes back
+            to low_hz at 1 so consecutive cycles join without a jump.
+        :param low_hz: Lowest frequency of the sweep in Hz.
+        :param high_hz: Highest frequency of the sweep in Hz.
+        :param shape: 'triangle' (constant sweep rate, sharp turnarounds),
+            'sine' (slows at the extremes, fastest in the middle) or
+            'rounded_triangle' (triangle with softened turnarounds; needs
+            round_fraction).
+        :param spacing: 'linear' (position interpolates Hz) or 'log'
+            (position interpolates log2 Hz, i.e. constant octave rate).
+        :return: np.ndarray of frequencies in Hz, same shape as cycle_phase.
+        """
+        if shape == "triangle":
+            # Piecewise linear: rise m*(phase - 0) on the first half,
+            # fall -m*(phase - 1) on the second half; slope m = 2 because
+            # the position covers 0 -> 1 in half a cycle.
+            slope = 2.0
+            position = np.where(cycle_phase < 0.5,
+                                slope * (cycle_phase - 0.0),
+                                -slope * (cycle_phase - 1.0))
+        elif shape == "sine":
+            position = 0.5 * (1.0 - np.cos(2.0 * np.pi * cycle_phase))
+        elif shape == "rounded_triangle":
+            if round_fraction is None:
+                raise ValueError("rounded_triangle needs round_fraction")
+            position = SoundGen.rounded_triangle_position(cycle_phase,
+                                                          round_fraction)
+        else:
+            raise ValueError(f"unknown shape: {shape!r}")
+
+        if spacing == "linear":
+            return low_hz + (high_hz - low_hz) * position
+        elif spacing == "log":
+            return low_hz * (high_hz / low_hz) ** position
+        raise ValueError(f"unknown spacing: {spacing!r}")
+
+    def updown_sweep_fn(self, low_hz, high_hz, sweep_rate_hz, tone_duration,
+                        shape, spacing, round_fraction=None):
+        """
+        f(t) that goes low -> high -> low, sweep_rate_hz full cycles per second.
+
+        Starts at low_hz at t=0. If sweep_rate_hz * tone_duration is not a
+        whole number, the last cycle is cut off mid-sweep (a warning is
+        issued).
+        """
+        n_cycles = sweep_rate_hz * tone_duration
+        if not np.isclose(n_cycles, round(n_cycles)):
+            warnings.warn(f"{n_cycles:.3f} cycles in {tone_duration} s: "
+                          "the last cycle is incomplete")
+        return lambda time_s: self.updown_freq_hz(
+            (time_s * sweep_rate_hz) % 1.0, low_hz, high_hz, shape, spacing,
+            round_fraction)
 
     def noise_maker(self, tone_duration, seed=None):
         if seed is not None:
