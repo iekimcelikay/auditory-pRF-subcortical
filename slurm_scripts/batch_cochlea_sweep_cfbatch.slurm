@@ -58,13 +58,19 @@ export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 WAV_DIR=${WAV_DIR:-$AUDITORY_PRF_ROOT/stimuli/produced/sweep_design_erb_3band}
 
 cd $AUDITORY_PRF_ROOT
+# Shared parent of all tasks' output folders; mkdir -p is safe when tasks start together
+mkdir -p $AUDITORY_PRF_ROOT/models_output/$(basename $WAV_DIR)
+
 conda run -n strf3.9 python $AUDITORY_PRF_ROOT/examples/cochlea_sweep_wavs.py \
     --wav-dir $WAV_DIR \
     --wav-index $WAV_INDEX \
     --cf-batch-size $CF_BATCH_SIZE \
     --cf-batch-index $CF_BATCH_INDEX
+PYTHON_STATUS=$?
 
 # End of job
 echo "==================================="
-echo "Job finished at $(date)"
+echo "Job finished at $(date) with python exit status $PYTHON_STATUS"
 echo "==================================="
+# Report a crash as FAILED in sacct instead of COMPLETED
+exit $PYTHON_STATUS

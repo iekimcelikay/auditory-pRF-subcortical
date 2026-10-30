@@ -95,6 +95,10 @@ class CochleaWavSimulation(_SimulationBase):
         timestamp = generate_timestamp()
         lsr, msr, hsr = self.config.num_ANF
         folder_name = f"wav_{self.config.num_cf}cf_{lsr}-{msr}-{hsr}anf_psth_{len(self.wav_files)}files_{timestamp}"
+        if self.config.cf_batch_enabled:
+            # Array tasks that start in the same second share a timestamp; the
+            # experiment_name (WAV + CF batch) is unique per task.
+            folder_name += f"_{self.config.experiment_name}"
 
         self.save_dir = Path(self.config.output_dir) / folder_name
         self.save_dir.mkdir(parents=True, exist_ok=True)
