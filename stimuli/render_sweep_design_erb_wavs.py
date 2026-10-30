@@ -11,7 +11,7 @@ turn the playback volume up.
 Usage (from the project root)
 -----------------------------
     python stimuli/render_sweep_design_erb_wavs.py --out-dir stimuli/produced/sweep_design_erb_3band
-    python stimuli/render_sweep_design_erb_wavs.py --out-dir /path --cycles 398  # 20 Hz only
+    python stimuli/render_sweep_design_erb_wavs.py --out-dir /path --cycles 199  # 10 Hz only
 """
 
 import argparse

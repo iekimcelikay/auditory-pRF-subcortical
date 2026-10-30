@@ -24,8 +24,8 @@ RANGE_HIGH_HZ = 800.0
 N_BANDS = 3
 RISE_FRACTION = 0.5                     # share of a period spent rising (0.5 = symmetric)
 
-# Whole cycles per 19.9 s sweep (0.50 ... 20.0 Hz), roughly geometric.
-CYCLES_PER_TRIAL = (10, 17, 29, 48, 82, 139, 235, 398)
+# Whole cycles per 19.9 s sweep (0.50 ... 10.0 Hz), roughly geometric.
+CYCLES_PER_TRIAL = (10, 15, 24, 36, 55, 85, 130, 199)
 
 
 def hz_to_erb_number(freq_hz):
