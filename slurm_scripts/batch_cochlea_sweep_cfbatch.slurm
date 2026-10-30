@@ -24,7 +24,8 @@
 #   python examples/combine_cf_batches.py --run-dir models_output/<wav_dir_name> \
 #       --expected-n-batches 6
 #
-# Usage: WAV_DIR=/path/to/sweep_wavs sbatch slurm_scripts/batch_cochlea_sweep_cfbatch.slurm
+# Usage: sbatch slurm_scripts/batch_cochlea_sweep_cfbatch.slurm
+#   (WAV_DIR defaults to stimuli/produced/sweep_design_erb_3band; override with WAV_DIR=...)
 
 N_WAV=24
 N_CF=30
@@ -53,8 +54,8 @@ module load Miniforge3
 
 # ---- Environment Setup --
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
-# Folder holding the sweep WAVs; no default on purpose (pass it with WAV_DIR=...)
-WAV_DIR=${WAV_DIR:?set WAV_DIR to the folder of sweep WAVs}
+# Folder holding the 24 sweep WAVs (copy sweep_design_erb_3band/ from the local machine here)
+WAV_DIR=${WAV_DIR:-$AUDITORY_PRF_ROOT/stimuli/produced/sweep_design_erb_3band}
 
 cd $AUDITORY_PRF_ROOT
 conda run -n strf3.9 python $AUDITORY_PRF_ROOT/examples/cochlea_sweep_wavs.py \
