@@ -18,7 +18,10 @@
 #
 # Defaults = the first test: NOISE-FREE, ON-GRID ground truths, 100 voxels, 1 repeat,
 # design seed 1000. Override with environment variables:
-#   NOISE=none|low|mid|high   GT_MODE=on_grid|off_grid   N_VOXELS=100   N_REPEATS=<n>
+#   NOISE=none|low|mid|high|all   (or several: NOISE="low mid high"; 'all' = low mid high,
+#   one shared grid and the same ground truths, plus the noise-comparison plots)
+#   GT_MODE=on_grid|off_grid   N_VOXELS=100   N_REPEATS=<n>  (default 10,000 per noisy level)
+#   GRID_FILE=<path to a saved candidate_grid_design<seed>.npz>   (skip the grid build)
 # e.g.  NOISE=low N_REPEATS=10000 sbatch --time=12:00:00 slurm_scripts/batch_sweep_recovery.slurm
 # Design seeds 1000...1009 as an array:  sbatch --array=0-9 slurm_scripts/batch_sweep_recovery.slurm
 #
@@ -35,6 +38,9 @@ N_VOXELS=${N_VOXELS:-100}
 DESIGN_SEED=$(( 1000 + ${SLURM_ARRAY_TASK_ID:-0} ))
 REPEATS_ARG=""
 if [ -n "$N_REPEATS" ]; then REPEATS_ARG="--n-repeats $N_REPEATS"; fi
+# GRID_FILE=<candidate_grid_design1000.npz> reuses a saved grid and skips the ~10 min build
+# (the grid depends only on the design seed, not on noise or ground truths).
+if [ -n "$GRID_FILE" ]; then REPEATS_ARG="$REPEATS_ARG --grid-file $GRID_FILE"; fi
 
 # Print job information
 echo "==================================="

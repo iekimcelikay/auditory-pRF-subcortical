@@ -22,8 +22,13 @@ Added for the sweeps, computed on the CLEAN GT BOLD of every voxel (independent 
     winner's, i.e. how distinguishable that parameter is (small margin = needs low noise)
   - n_ties: candidates within TIE_TOL of r_best
 
+Several noise levels share one grid and the same ground truths (like the tone-cloud
+``noisy_ongrid`` runners); the comparison plots and accuracy table cover all levels.
+
 Run from the project root:
     python -m auditory_prf.prf_pipeline.solver.sweep_recovery --noise none --gt-mode on_grid
+    python -m auditory_prf.prf_pipeline.solver.sweep_recovery --noise all --gt-mode on_grid \\
+        --grid-file sweep_recovery_results/<run>/candidate_grid_design1000.npz
 """
 
 import argparse
@@ -54,6 +59,7 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     MC_SEED,
     N_NOISE_REPEATS,
     TAU_ON_GRID_MS,
+    plot_noise_comparison,
     plot_recovery,
     save_recovery_table,
 )
@@ -76,6 +82,8 @@ N_VOXELS = 100
 DESIGN_SEED = 1000
 N_TOP_CANDIDATES = 5
 TIE_TOL = 1e-5                                 # templates are float32
+NOISE_JITTER = [0.0, 0.0, 0.0]                 # PmNoise jitter (freq, amp, phase), as the noisy_ongrid runners
+NOISE_LEVELS = ["low", "mid", "high"]
 
 
 # ── Candidate grid ────────────────────────────────────────────────────────────
@@ -219,7 +227,7 @@ def _recover_one_voxel(v_i: int, true_row: np.ndarray, state: dict) -> dict:
     for rep in range(n_repeats):
         run_seeds = spawn_noise_seeds(MC_SEED, v_i, rep, n_runs=1)
         measurements[rep, :] = draw_noisy_measurement([gt_bold], state["noise"], state["tr_s"],
-                                                      run_seeds)
+                                                      run_seeds, jitter=state["jitter"])
     best_idx = best_match_indices(state["template_matrix_norm"], measurements)
     result = clean_margins(gt_bold, state["template_matrix_norm"], state["candidate_params"])
     result["recovered"] = state["candidate_params"][best_idx]          # (n_repeats, n_params)
@@ -239,6 +247,7 @@ def run_recovery(
     noise: str,
     n_repeats: int,
     n_workers: int = 1,
+    jitter: Optional[list] = NOISE_JITTER,
 ) -> dict:
     """Monte Carlo recovery for one noise level.
 
@@ -251,7 +260,8 @@ def run_recovery(
     state = dict(raw_psth_by_seq=raw_psth_by_seq, run_design=run_design,
                  total_run_dur_s=total_run_dur_s, tr_s=tr_s, silence_seq_id=silence_seq_id,
                  hrf_kernel=hrf_kernel, candidate_params=candidate_params,
-                 template_matrix_norm=template_matrix_norm, noise=noise, n_repeats=n_repeats)
+                 template_matrix_norm=template_matrix_norm, noise=noise, n_repeats=n_repeats,
+                 jitter=jitter)
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel, true_params, state, n_workers))
     else:
@@ -265,6 +275,33 @@ def run_recovery(
         "top_idx": np.stack([r["top_idx"] for r in voxel_results]),
         "top_r": np.stack([r["top_r"] for r in voxel_results]),
     }
+
+
+def run_noise_sweep(
+    raw_psth_by_seq: dict,
+    run_design: list,
+    total_run_dur_s: float,
+    tr_s: float,
+    silence_seq_id: str,
+    hrf_kernel: np.ndarray,
+    candidate_params: np.ndarray,
+    template_matrix_norm: np.ndarray,
+    true_params: np.ndarray,
+    noise_levels: list,
+    n_repeats_by_noise: dict,
+    n_workers: int = 1,
+    jitter: Optional[list] = NOISE_JITTER,
+) -> dict:
+    """run_recovery at every noise level on the SAME ground truths; {noise: result}."""
+    results = {}
+    for noise in noise_levels:
+        logger.info("noise '%s': %d voxels x %d repeats ...", noise, len(true_params),
+                    n_repeats_by_noise[noise])
+        results[noise] = run_recovery(
+            raw_psth_by_seq, run_design, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
+            candidate_params, template_matrix_norm, true_params, noise,
+            n_repeats_by_noise[noise], n_workers, jitter)
+    return results
 
 
 def summarize(true_params: np.ndarray, result: dict) -> dict:
@@ -302,11 +339,14 @@ def main() -> None:
     parser.add_argument("--results-dir", type=str,
                         default="models_output/sweep_design_erb_3band/combined")
     parser.add_argument("--output-dir", type=str, default="sweep_recovery_results")
-    parser.add_argument("--noise", choices=["none", "low", "mid", "high"], default="none")
+    parser.add_argument("--noise", nargs="+", default=["none"],
+                        choices=["none", "low", "mid", "high", "all"],
+                        help="One or more noise levels; 'all' = low mid high, run on the same "
+                             "ground truths with one shared grid.")
     parser.add_argument("--gt-mode", choices=["on_grid", "off_grid"], default="on_grid")
     parser.add_argument("--n-voxels", type=int, default=N_VOXELS)
     parser.add_argument("--n-repeats", type=int, default=None,
-                        help="Default: 1 for --noise none, else N_NOISE_REPEATS.")
+                        help="Per noise level. Default: 1 for 'none', else N_NOISE_REPEATS.")
     parser.add_argument("--design-seed", type=int, default=DESIGN_SEED)
     parser.add_argument("--n-workers", type=int,
                         default=int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)))
@@ -316,12 +356,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     import stimuli.sweep_design_erb as design   # needs the project root on sys.path
-    n_repeats = args.n_repeats or (1 if args.noise == "none" else N_NOISE_REPEATS)
-    run_dir = (Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_{args.noise}_"
+    noise_levels = NOISE_LEVELS if "all" in args.noise else list(dict.fromkeys(args.noise))
+    n_repeats_by_noise = {noise: args.n_repeats or (1 if noise == "none" else N_NOISE_REPEATS)
+                          for noise in noise_levels}
+    run_dir = (Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_{'-'.join(noise_levels)}_"
                f"{args.gt_mode}_design{args.design_seed}")   # seed keeps array tasks apart
     run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("noise=%s gt_mode=%s voxels=%d repeats=%d workers=%d -> %s", args.noise,
-                args.gt_mode, args.n_voxels, n_repeats, args.n_workers, run_dir)
+    logger.info("noise=%s gt_mode=%s voxels=%d repeats=%s workers=%d -> %s", noise_levels,
+                args.gt_mode, args.n_voxels, n_repeats_by_noise, args.n_workers, run_dir)
 
     raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
     run_design = design.build_run_design(args.design_seed)
@@ -342,33 +384,50 @@ def main() -> None:
 
     rng = np.random.default_rng(MC_SEED)
     true_params = sample_ground_truths(args.gt_mode, rng, n_cf, candidate_params, args.n_voxels)
-    result = run_recovery(raw_psth_by_seq, run_design, total_run_dur_s, tr_s,
-                          design.SILENCE_SEQ_ID, hrf_kernel, candidate_params,
-                          template_matrix_norm, true_params, args.noise, n_repeats, args.n_workers)
+    results = run_noise_sweep(raw_psth_by_seq, run_design, total_run_dur_s, tr_s,
+                              design.SILENCE_SEQ_ID, hrf_kernel, candidate_params,
+                              template_matrix_norm, true_params, noise_levels,
+                              n_repeats_by_noise, args.n_workers)
 
-    recovered = result["recovered_params"]
-    accuracy = compute_accuracy_correlations(true_params, recovered, param_names=PARAM_NAMES)
-    summary = summarize(true_params, result)
-    logger.info("accuracy (true vs per-voxel mean recovered, Pearson r): %s",
-                {k: round(v, 4) for k, v in accuracy.items()})
-    logger.info("exact recovery fraction: %s", {k: round(v, 3) for k, v in summary["exact_fraction"].items()})
-    logger.info("clean-BOLD margin median: %s", {k: f"{v:.2e}" for k, v in summary["margin_median"].items()})
-    logger.info("clean-BOLD margin min   : %s", {k: f"{v:.2e}" for k, v in summary["margin_min"].items()})
-    logger.info("max candidates tied with the best (r within %.0e): %d", TIE_TOL, summary["n_ties_max"])
+    recovered_by_noise, accuracy_by_noise = {}, {}
+    for noise, result in results.items():
+        recovered = result["recovered_params"]
+        recovered_by_noise[noise] = recovered
+        accuracy = compute_accuracy_correlations(true_params, recovered, param_names=PARAM_NAMES)
+        accuracy_by_noise[noise] = accuracy
+        summary = summarize(true_params, result)
+        logger.info("[%s] accuracy (true vs per-voxel mean recovered, Pearson r): %s", noise,
+                    {k: round(v, 4) for k, v in accuracy.items()})
+        logger.info("[%s] exact recovery fraction: %s", noise,
+                    {k: round(v, 3) for k, v in summary["exact_fraction"].items()})
+        logger.info("[%s] clean-BOLD margin median: %s", noise,
+                    {k: f"{v:.2e}" for k, v in summary["margin_median"].items()})
+        logger.info("[%s] clean-BOLD margin min   : %s", noise,
+                    {k: f"{v:.2e}" for k, v in summary["margin_min"].items()})
+        logger.info("[%s] max candidates tied with the best (r within %.0e): %d", noise,
+                    TIE_TOL, summary["n_ties_max"])
 
-    # the old argmax structure, then the margins
-    np.savez(run_dir / f"recovery_results_design{args.design_seed}_{args.noise}.npz",
-             true_params=true_params, recovered_params=recovered,
-             param_names=PARAM_NAMES, **{k: v for k, v in result.items() if k != "recovered_params"})
-    plot_recovery(true_params, recovered, run_dir / f"recovery_scatter_{args.noise}.png",
-                  param_names=PARAM_NAMES)
-    save_recovery_table(true_params, recovered, run_dir / f"recovery_table_{args.noise}.csv",
+        # the old argmax structure, per noise level, then the margins
+        np.savez(run_dir / f"recovery_results_design{args.design_seed}_{noise}.npz",
+                 true_params=true_params, recovered_params=recovered,
+                 param_names=PARAM_NAMES,
+                 **{k: v for k, v in result.items() if k != "recovered_params"})
+        plot_recovery(true_params, recovered, run_dir / f"recovery_scatter_{noise}.png",
+                      param_names=PARAM_NAMES)
+        save_recovery_table(true_params, recovered, run_dir / f"recovery_table_{noise}.csv",
+                            param_names=PARAM_NAMES)
+        save_margin_table(true_params, result, run_dir / f"margin_table_{noise}.csv")
+
+    save_accuracy_table(accuracy_by_noise, run_dir / f"accuracy_table_design{args.design_seed}.csv",
                         param_names=PARAM_NAMES)
-    save_accuracy_table({args.noise: accuracy}, run_dir / f"accuracy_table_{args.noise}.csv",
-                        param_names=PARAM_NAMES)
-    plot_accuracy_comparison({args.noise: accuracy}, run_dir / f"accuracy_comparison_{args.noise}.png",
-                             param_names=PARAM_NAMES, n_voxels=args.n_voxels, n_repeats=n_repeats)
-    save_margin_table(true_params, result, run_dir / f"margin_table_{args.noise}.csv")
+    plot_accuracy_comparison(accuracy_by_noise,
+                             run_dir / f"accuracy_comparison_design{args.design_seed}.png",
+                             param_names=PARAM_NAMES, n_voxels=args.n_voxels,
+                             n_repeats=max(n_repeats_by_noise.values()))
+    if len(noise_levels) > 1:
+        plot_noise_comparison(true_params, recovered_by_noise,
+                              run_dir / f"noise_comparison_design{args.design_seed}.png",
+                              param_names=PARAM_NAMES)
     logger.info("done -> %s", run_dir.resolve())
 
 
