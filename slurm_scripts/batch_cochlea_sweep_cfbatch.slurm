@@ -5,8 +5,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=100G
-#SBATCH --array=0-143
+#SBATCH --mem=80G
+#SBATCH --array=0-149
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/cochlea_sweepcfb_%A_%a.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/cochlea_sweepcfb_%A_%a.err
 #SBATCH --mail-type=ALL
@@ -14,11 +14,15 @@
 
 # Full spike-train cochlea model for centered-sweep WAVs, split over CF batches.
 # One task = one WAV x one CF batch. With the settings below:
-#   30 CFs / 5 per batch = 6 batches, 24 WAVs  ->  24 * 6 = 144 tasks (--array=0-143).
+#   30 CFs / 5 per batch = 6 batches, 25 WAVs  ->  25 * 6 = 150 tasks (--array=0-149).
+#   WAV 0-23 = the sweeps (tasks 0-143); WAV 24 = silence_20s.wav (tasks 144-149),
+#   e.g. only the silent trial:  sbatch --array=144-149 <this script>
 #   wav_index = task / N_BATCHES,  cf_batch_index = task % N_BATCHES
 # If you change N_WAV, N_CF or CF_BATCH_SIZE, change --array to 0-(N_WAV*N_BATCHES-1).
-# --mem=100G is a first guess (the unbatched jobs used 350G for all 30 CFs); check
-# the real peak with `seff <jobid>` after the first tasks finish and adjust.
+# --mem=80G: measured peak was 57.7 GB for one 5-CF task (~11.5 GB per CF; wav 7, cf
+# batch 1, job 7836578_43, 6 min), plus ~40% headroom. Only one task was measured; if
+# `sacct -j <jobid> --format=JobID,State,MaxRSS` shows OUT_OF_MEMORY, resubmit those
+# tasks with --mem=100G.
 #
 # Afterwards, recombine the batches (once all tasks are done):
 #   python examples/combine_cf_batches.py --run-dir models_output/<wav_dir_name> \
@@ -27,7 +31,7 @@
 # Usage: sbatch slurm_scripts/batch_cochlea_sweep_cfbatch.slurm
 #   (WAV_DIR defaults to stimuli/produced/sweep_design_erb_3band; override with WAV_DIR=...)
 
-N_WAV=24
+N_WAV=25
 N_CF=30
 CF_BATCH_SIZE=5
 N_BATCHES=$(( (N_CF + CF_BATCH_SIZE - 1) / CF_BATCH_SIZE ))

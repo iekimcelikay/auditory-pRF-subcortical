@@ -41,6 +41,10 @@ SWEEP_NAME_PATTERN = re.compile(
 )
 
 
+# Silent trial (stimuli/render_sweep_design_erb_wavs.py --silence): silence_20s.wav
+SILENCE_NAME_PATTERN = re.compile(r"^silence_(?P<duration_s>\d+)s")
+
+
 def hz_to_erb_number(freq_hz: float) -> float:
     """ERB-number (Glasberg & Moore 1990)."""
     return 21.4 * math.log10(4.37 * freq_hz / 1000.0 + 1.0)
@@ -69,6 +73,11 @@ def parse_sweep_filename(filename: str) -> dict:
     ValueError
         If the name is not a sweep name (no silent placeholder metadata).
     """
+    silence_match = SILENCE_NAME_PATTERN.match(filename)
+    if silence_match is not None:
+        return {"stimulus_type": "silence",
+                "trial_duration_s": float(silence_match.group("duration_s")),
+                "n_cycles": 0}
     band_match = BAND_NAME_PATTERN.search(filename)
     if band_match is not None:
         n_cycles = int(band_match.group("n_cycles"))

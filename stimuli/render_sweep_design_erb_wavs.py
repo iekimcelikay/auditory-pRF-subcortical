@@ -11,7 +11,7 @@ turn the playback volume up.
 Usage (from the project root)
 -----------------------------
     python stimuli/render_sweep_design_erb_wavs.py --out-dir stimuli/produced/sweep_design_erb_3band
-    python stimuli/render_sweep_design_erb_wavs.py --out-dir /path --cycles 199  # 10 Hz only
+    python stimuli/render_sweep_design_erb_wavs.py --out-dir /path --cycles 398  # 20 Hz only
 """
 
 import argparse
@@ -50,15 +50,33 @@ def render_all(out_dir: Path, cycle_counts: tuple = design.CYCLES_PER_TRIAL) -> 
     return written
 
 
+def render_silence_wav(out_dir: Path) -> Path:
+    """Write a silent trial (20 s of zeros) as silence_20s.wav.
+
+    The name sorts after the 24 sweep files, so it becomes the last WAV index (24)
+    and the sweep indices are unchanged. Its cochlear response gives the null-trial and
+    blank responses of the run assembly.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_samples = round(TRIAL_DURATION_S * SAMPLE_RATE_HZ)
+    wav_path = out_dir / f"silence_{TRIAL_DURATION_S:.0f}s.wav"
+    wavfile.write(wav_path, SAMPLE_RATE_HZ, np.zeros(n_samples, dtype=np.int16))
+    return wav_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", type=str, required=True)
+    parser.add_argument("--silence", action="store_true",
+                        help="Also (or, with --cycles, instead) write the silent trial.")
     parser.add_argument("--cycles", type=int, nargs="+",
                         default=list(design.CYCLES_PER_TRIAL),
                         help="Cycle counts per 19.9 s sweep (default: the design's 8 counts).")
     args = parser.parse_args()
     written = render_all(Path(args.out_dir), tuple(args.cycles))
     print(f"{len(written)} files in {written[0].parent}")
+    if args.silence:
+        print("wrote", render_silence_wav(Path(args.out_dir)))
 
 
 if __name__ == "__main__":
