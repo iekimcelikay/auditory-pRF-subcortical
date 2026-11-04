@@ -359,7 +359,8 @@ def main() -> None:
     noise_levels = NOISE_LEVELS if "all" in args.noise else list(dict.fromkeys(args.noise))
     n_repeats_by_noise = {noise: args.n_repeats or (1 if noise == "none" else N_NOISE_REPEATS)
                           for noise in noise_levels}
-    run_dir = (Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_{'-'.join(noise_levels)}_"
+    timestamp = f"{datetime.now():%Y%m%d_%H%M%S}"
+    run_dir = (Path(args.output_dir) / f"{timestamp}_{'-'.join(noise_levels)}_"
                f"{args.gt_mode}_design{args.design_seed}")   # seed keeps array tasks apart
     run_dir.mkdir(parents=True, exist_ok=True)
     logger.info("noise=%s gt_mode=%s voxels=%d repeats=%s workers=%d -> %s", noise_levels,
@@ -408,7 +409,8 @@ def main() -> None:
                     TIE_TOL, summary["n_ties_max"])
 
         # the old argmax structure, per noise level, then the margins
-        np.savez(run_dir / f"recovery_results_design{args.design_seed}_{noise}.npz",
+        # name follows replot_from_results.py: <prefix>_results_design<N>_<level>_<timestamp>.npz
+        np.savez(run_dir / f"sweep_recovery_results_design{args.design_seed}_{noise}_{timestamp}.npz",
                  true_params=true_params, recovered_params=recovered,
                  param_names=PARAM_NAMES,
                  **{k: v for k, v in result.items() if k != "recovered_params"})

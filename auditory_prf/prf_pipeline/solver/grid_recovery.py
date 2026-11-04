@@ -39,6 +39,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
@@ -357,8 +358,49 @@ def run_recovery(
     return recovered_params
 
 
+EDGE_LINEWIDTH = 0.1   # thin black outline on recovery-scatter markers (points)
+
+
+GRID_LINE_ALPHA = 0.25   # transparency of the ground-truth value grid lines
+GRID_LINE_WIDTH = 0.5
+FINE_GRID_LINE_ALPHA = 0.08   # fainter lines for fine (many-valued) parameters, e.g. sigma_dur_ms
+MAX_COARSE_GRID_LEVELS = 30   # more unique true values than this = "fine" (shared by jitter + grid rules)
+
+
+def _draw_true_value_grid(ax, true_values: np.ndarray) -> None:
+    """Faint horizontal + vertical lines at every unique ground-truth value of one parameter.
+
+    The same values are drawn on both axes (the plot is true vs. recovered on the
+    same scale), so points can be read against the grid the voxels were simulated from.
+    Fine parameters (> ``MAX_COARSE_GRID_LEVELS`` unique values) get fainter lines
+    so dozens of closely spaced lines do not form a dark band.
+    """
+    unique_values = np.unique(true_values)
+    line_alpha = FINE_GRID_LINE_ALPHA if len(unique_values) > MAX_COARSE_GRID_LEVELS else GRID_LINE_ALPHA
+    for value in unique_values:
+        ax.axhline(value, color="gray", alpha=line_alpha, linewidth=GRID_LINE_WIDTH, zorder=0)
+        ax.axvline(value, color="gray", alpha=line_alpha, linewidth=GRID_LINE_WIDTH, zorder=0)
+
+
+def _jitter_scale(grid_values: np.ndarray, jitter_frac: float) -> float:
+    """Per-parameter jitter std for the recovery scatter: ``jitter_frac`` x (max - min) of the true values.
+
+    Same rule for every parameter (coarse or fine grid); ``0.0`` if there is a single unique value.
+    """
+    unique_vals = np.unique(grid_values)
+    if len(unique_vals) < 2:
+        return 0.0
+    return jitter_frac * (unique_vals[-1] - unique_vals[0])
+
+
+def _apply_jitter(values: np.ndarray, std: float, rng: np.random.Generator) -> np.ndarray:
+    """Draw plotted positions ~ Normal(value, std). Display-only."""
+    return values + rng.normal(0.0, std, size=values.shape)
+
+
 def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path,
-                   param_names: list = PARAM_NAMES) -> None:
+                   param_names: list = PARAM_NAMES, jitter_frac: float = 0.01,
+                   jitter_seed: int = 0, shuffle_draw_order: bool = True) -> None:
     """Per-parameter recovery scatter: true (y) vs. recovered (x), unity line.
 
     Points are colored by ground-truth combo index, consistently across all
@@ -382,26 +424,42 @@ def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_pa
     colors = [cmap(gt_i / max(n_gt_combos, 1)) for gt_i in range(n_gt_combos)]
 
     fig, axes = plt.subplots(1, n_params, figsize=(4 * n_params, 4))
+    jitter_rng = np.random.default_rng(jitter_seed)   # fixed seed: replots are reproducible
+    draw_order = None   # built once the point count is known; shared across panels
 
     for p, (ax, name) in enumerate(zip(axes, param_names)):
-        for gt_i in range(n_gt_combos):
-            est_vals = recovered_params[gt_i, :, p]
-            true_val = np.full(n_repeats, true_params[gt_i, p])
-            ax.scatter(est_vals, true_val, s=6, alpha=0.3, color=colors[gt_i],
-                       label=f"GT {gt_i}" if p == 0 else None)
+        jitter_std = _jitter_scale(true_params[:, p], jitter_frac)
+        # Jitter is for display only (stacked points on a discrete grid); data/tables stay exact.
+        est_plot = _apply_jitter(recovered_params[:, :, p], jitter_std, jitter_rng)               # (n_gt_combos, n_repeats)
+        true_plot = _apply_jitter(np.repeat(true_params[:, p:p + 1], n_repeats, axis=1), jitter_std, jitter_rng)
+        if shuffle_draw_order:
+            # One scatter() call over all points in random order (same order every panel), so no
+            # combo is always drawn last and covers the others where clouds overlap.
+            combo_idx = np.repeat(np.arange(n_gt_combos), n_repeats)
+            if draw_order is None:
+                draw_order = np.random.default_rng(jitter_seed).permutation(combo_idx.size)
+            ax.scatter(est_plot.ravel()[draw_order], true_plot.ravel()[draw_order], s=6, alpha=0.3,
+                       color=np.array(colors)[combo_idx[draw_order]],
+                       edgecolors="black", linewidths=EDGE_LINEWIDTH)
+        else:
+            for gt_i in range(n_gt_combos):
+                ax.scatter(est_plot[gt_i], true_plot[gt_i], s=6, alpha=0.3, color=colors[gt_i],
+                           edgecolors="black", linewidths=EDGE_LINEWIDTH)
 
         true_vals_all = np.repeat(true_params[:, p], n_repeats)
         est_vals_all  = recovered_params[:, :, p].ravel()
         lo = min(true_vals_all.min(), est_vals_all.min())
         hi = max(true_vals_all.max(), est_vals_all.max())
         ax.plot([lo, hi], [lo, hi], "--", color="black", linewidth=1, zorder=0)
+        _draw_true_value_grid(ax, true_params[:, p])
         ax.set_xlabel(f"recovered {name}")
         ax.set_ylabel(f"true {name}")
         ax.set_title(name)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    for handle in handles:
-        handle.set_alpha(1.0)   # legend swatches stay readable regardless of the data points' alpha
+    # Proxy handles: with a single shuffled scatter() call there are no per-combo artists to label.
+    handles = [Line2D([], [], marker="o", linestyle="", markersize=3, color=colors[gt_i])
+               for gt_i in range(n_gt_combos)]
+    labels = [f"GT {gt_i}" for gt_i in range(n_gt_combos)]
     fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.0, 0.5),
                fontsize=7, title="GT combo",
                ncol=max(1, int(np.ceil(n_gt_combos / 20))))
@@ -447,6 +505,8 @@ def plot_noise_comparison(
     recovered_by_noise: dict,
     save_path: Path,
     param_names: list = PARAM_NAMES,
+    jitter_frac: float = 0.01,
+    jitter_seed: int = 0,
 ) -> None:
     """Per-parameter recovery scatter, overlaying all noise levels for the SAME ground truths.
 
@@ -482,6 +542,7 @@ def plot_noise_comparison(
     n_repeats = next(iter(recovered_by_noise.values())).shape[1]
     shuffle_rng = np.random.default_rng(0)
     order = None   # built once we know the combined point count (same for every panel)
+    jitter_rng = np.random.default_rng(jitter_seed)   # fixed seed: replots are reproducible
 
     for p, (ax, name) in enumerate(zip(axes, param_names)):
         est_all, true_all, color_all = [], [], []
@@ -496,15 +557,23 @@ def plot_noise_comparison(
         true_all = np.concatenate(true_all)
         color_all = np.array(color_all)
 
+        # Unity-line extent from the exact data; jitter below is display-only.
+        lo = min(true_all.min(), est_all.min())
+        hi = max(true_all.max(), est_all.max())
+
+        jitter_std = _jitter_scale(true_params[:, p], jitter_frac)
+        est_all  = _apply_jitter(est_all, jitter_std, jitter_rng)
+        true_all = _apply_jitter(true_all, jitter_std, jitter_rng)
+
         if order is None:
             order = shuffle_rng.permutation(len(est_all))
         est_all, true_all, color_all = est_all[order], true_all[order], color_all[order]
 
-        ax.scatter(est_all, true_all, s=5, alpha=0.15, color=color_all)
+        ax.scatter(est_all, true_all, s=5, alpha=0.15, color=color_all,
+                   edgecolors="black", linewidths=EDGE_LINEWIDTH)
 
-        lo = min(true_all.min(), est_all.min())
-        hi = max(true_all.max(), est_all.max())
         ax.plot([lo, hi], [lo, hi], "--", color="black", linewidth=1, zorder=0)
+        _draw_true_value_grid(ax, true_params[:, p])
         ax.set_xlabel(f"recovered {name}")
         ax.set_ylabel(f"true {name}")
         ax.set_title(name)
