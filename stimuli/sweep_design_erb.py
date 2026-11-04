@@ -9,14 +9,17 @@ that is linear in ERB-number, repeated for 19.9 s with a whole number of cycles,
 rise_fraction argument keeps the asymmetric case available.
 """
 
+import itertools
 import re
 
 import numpy as np
 
+from auditory_prf.prf_pipeline.run_assembly import generate_run_design
 from auditory_prf.utils.stimulus_utils import calc_gaussian_centers
 from stimuli.soundgen import SoundGen
 from stimuli.sweep_design_centered import (
-    DBSPL, RAMP_S, SAMPLE_RATE_HZ, SILENCE_S, SWEEP_DURATION_S, TRIAL_DURATION_S)
+    CLOSING_BLANK_S, DBSPL, ITI_RANGE_S, NULL_FRACTION, OPENING_BLANK_S, RAMP_S,
+    SAMPLE_RATE_HZ, SILENCE_S, SWEEP_DURATION_S, TR_S, TRIAL_DURATION_S)
 
 # ── Sweep parameters ───────────────────────────────────────────────────────
 RANGE_LOW_HZ = 125.0
@@ -142,3 +145,60 @@ def render_band_sweep(lower_hz: float, upper_hz: float, n_cycles: int,
     trial_sound = np.concatenate([sound, np.zeros(n_trial_samples - len(sound))])
     assert trial_sound.shape == (n_trial_samples,)
     return trial_sound
+
+
+# ── Run design ─────────────────────────────────────────────────────────────
+# One run = opening blank + (3 bands x 8 cycle counts = 24 sweep trials + nulls) x 20 s
+# + closing blank; same timing constants as the centered design (TR 1.6 s, 4 TR blanks,
+# no ITI, 25 % nulls -> 8 nulls), i.e. 652.8 s = 408 TRs. Null trials present the silent
+# trial, whose cochlear response (silence_20s) is placed in the run like any other trial.
+SILENCE_SEQ_ID = f"silence_{TRIAL_DURATION_S:.0f}s"
+
+
+def sweep_seq_id(n_cycles: int, unused_isi_ms: int, center_hz) -> str:
+    """soundfileid (wav stem, with the _<rate>hz suffix) of one trial.
+
+    Mirrors the (tone_on_ms, isi_ms, freq_hz) callable that generate_run_design expects:
+    n_cycles takes the tone_on_ms slot, unused_isi_ms is ignored and center_hz (None for
+    nulls) takes the freq_hz slot. Nulls map to SILENCE_SEQ_ID.
+    """
+    if center_hz is None:
+        return SILENCE_SEQ_ID
+    bands = [band for band in BANDS_HZ if band[0] == center_hz]
+    assert len(bands) == 1, f"{center_hz} is not a band center of BANDS_HZ"
+    return wav_name(*bands[0], n_cycles)[:-len(".wav")]
+
+
+def build_base_trials(
+    bands_hz: tuple = BANDS_HZ,
+    cycles_per_trial: tuple = CYCLES_PER_TRIAL,
+    null_fraction: float = NULL_FRACTION,
+) -> list:
+    """Master trial list for ONE run: every (band, cycle count) once plus nulls.
+
+    Returns
+    -------
+    list of (n_cycles, 0, center_hz) for sweeps and (0, 0, None) for nulls.
+    """
+    sweep_trials = [(n_cycles, 0, center_hz)
+                    for (center_hz, _, _), n_cycles in itertools.product(bands_hz,
+                                                                         cycles_per_trial)]
+    n_null = int(np.floor(len(sweep_trials) * null_fraction / (1 - null_fraction)))
+    return sweep_trials + [(0, 0, None)] * n_null
+
+
+def build_run_design(seed: int) -> list:
+    """Shuffled run design: list of (soundfileid, onset_s); nulls are SILENCE_SEQ_ID."""
+    return generate_run_design(
+        build_base_trials(),
+        sweep_seq_id,
+        trial_duration_s=TRIAL_DURATION_S,
+        opening_blank_s=OPENING_BLANK_S,
+        iti_range_s=ITI_RANGE_S,
+        seed=seed,
+    )
+
+
+def total_run_duration_s(run_design: list) -> float:
+    """Run length implied by a design: last onset + trial + closing blank."""
+    return run_design[-1][1] + TRIAL_DURATION_S + CLOSING_BLANK_S
