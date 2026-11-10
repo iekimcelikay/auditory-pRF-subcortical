@@ -372,7 +372,9 @@ def load_baseline_results(baseline_dir: Path, noise: str, n_repeats: int,
     baseline_dir : Path
         Folder with ``sweep_recovery_results_design1000_<noise>_<timestamp>.npz``.
     true_params : np.ndarray, shape (n_voxels, 4)
-        Ground truths of the new run; asserted equal to the file's (same voxels, same order).
+        Ground truths of the new run; asserted equal to the FIRST n_voxels voxels of the file
+        (same voxels, same order). A smaller run (e.g. a smoke test) is allowed because the
+        ground-truth draw of n voxels is the first n voxels of the draw of any larger number.
 
     Returns
     -------
@@ -383,10 +385,13 @@ def load_baseline_results(baseline_dir: Path, noise: str, n_repeats: int,
     with np.load(paths[0], allow_pickle=True) as baseline:
         assert baseline["recovered_params"].shape[1] >= n_repeats, (
             f"{paths[0].name} has {baseline['recovered_params'].shape[1]} repeats, need {n_repeats}")
-        assert baseline["true_params"].shape == true_params.shape and np.allclose(
-            baseline["true_params"], true_params), f"{paths[0].name}: other ground-truth voxels"
-        return {"recovered_params": baseline["recovered_params"][:, :n_repeats, :],
-                "margins": baseline["margins"], "n_ties": baseline["n_ties"]}
+        n_voxels = len(true_params)
+        assert baseline["true_params"].shape[0] >= n_voxels, (
+            f"{paths[0].name} has {baseline['true_params'].shape[0]} voxels, need {n_voxels}")
+        assert np.allclose(baseline["true_params"][:n_voxels], true_params), (
+            f"{paths[0].name}: other ground-truth voxels")
+        return {"recovered_params": baseline["recovered_params"][:n_voxels, :n_repeats, :],
+                "margins": baseline["margins"][:n_voxels], "n_ties": baseline["n_ties"][:n_voxels]}
 
 
 def save_run_comparison_table(summary_by_method: dict, save_path: Path) -> None:
@@ -547,6 +552,10 @@ def recover_and_report(
     true_params = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(cf_list_hz),
                                        candidate_params, n_voxels)
 
+    # load the baselines first: a mismatch should stop the job before the expensive recovery
+    baselines = {noise: load_baseline_results(baseline_dir, noise, n_repeats, true_params)
+                 for noise in noise_levels}
+
     summary_by_method = {"1run": {}, "24run_joint": {}, "24run_random_effects": {}}
     estimate_summary = {estimate: {} for estimate in ESTIMATES}
     accuracy = {estimate: {} for estimate in ESTIMATES}
@@ -558,7 +567,7 @@ def recover_and_report(
             raw_psth_by_seq, run_designs, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
             candidate_params, template_matrix_norm, template_per_run_norm, true_params, noise,
             n_repeats, cf_list_hz, n_workers)
-        baseline = load_baseline_results(baseline_dir, noise, n_repeats, true_params)
+        baseline = baselines[noise]
 
         identical = float(np.mean(np.all(
             result["recovered_first_run"] == baseline["recovered_params"], axis=-1)))
