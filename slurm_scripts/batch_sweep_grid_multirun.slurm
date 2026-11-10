@@ -4,8 +4,8 @@
 #SBATCH --job-name=sweep_grid_multirun
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=48
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
 #SBATCH --time=01:00:00
 #SBATCH --array=0-23
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/sweep_grid_multirun_%A_%a.out
@@ -18,8 +18,9 @@
 # Each grid: 30 CF x 7 alpha x 9 tau x 4 w = 7,560 templates of one 408-TR run, saved
 # UN-normalised (each run keeps its amplitude) as
 #   sweep_recovery_multirun_grids/run_grid_design<seed>.npz
-# The build is parallel over the 210 (alpha, CF) pairs; about 10 min with 16 CPUs, so a few
-# minutes with 48 (the time limit is only a ceiling; check `seff <jobid>` and adjust).
+# The build is parallel over the 210 (alpha, CF) pairs; about 10 min with 16 CPUs (the time
+# limit is only a ceiling; check `seff <jobid>` and adjust). 16 CPUs start sooner in the queue
+# than a whole 48-core node; the 24 tasks run side by side.
 #
 # Submit:  sbatch slurm_scripts/batch_sweep_grid_multirun.slurm      (24 array tasks)
 # Check:   ls sweep_recovery_multirun_grids/   -> 24 files, run_grid_design1000 ... 1023

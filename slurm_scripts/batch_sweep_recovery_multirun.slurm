@@ -4,7 +4,7 @@
 #SBATCH --job-name=sweep_recovery_multirun
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=48
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/sweep_recovery_multirun_%j.out
@@ -16,7 +16,7 @@
 # repeat, 24 runs with different stimulus orders and independent noise; two estimates, the
 # joint fit (concatenated runs) and random effects (one estimate per run, then the average in
 # log space); compared with the single-run results (baseline) and with the spread of the 24
-# per-run estimates. Voxels are spread over all CPUs of the node.
+# per-run estimates. Voxels are spread over all CPUs of the job.
 #
 # Needs, on this machine:
 #   models_output/sweep_design_erb_3band/combined/        the 25 combined cochlear results
@@ -31,9 +31,9 @@
 # Full run:
 #   BASELINE_DIR=<folder> sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
 #
-# --time=01:00:00 is only a ceiling. Expected run time roughly 5-10 min for the full run
+# --time=01:00:00 is only a ceiling. Expected run time roughly 10-15 min for the full run
 # (about 2.3 core-hours of work for the joint fit and about as much for the per-run matching,
-# over 48 CPUs); to be measured in the smoke run, then check `seff <jobid>` and adjust.
+# over 32 CPUs); to be measured in the smoke run, then check `seff <jobid>` and adjust.
 
 NOISE=${NOISE:-"low mid high"}
 N_VOXELS=${N_VOXELS:-100}
