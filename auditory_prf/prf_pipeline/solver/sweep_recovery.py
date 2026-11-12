@@ -416,7 +416,8 @@ def plot_relative_mse(summary_by_noise: dict, save_path: Path, param_names: list
         bars = ax.bar(x + i * width, heights, width, label=noise,
                       color=level_colors.get(noise, "steelblue"))
         ax.bar_label(bars, fmt="%.2f", fontsize=7, padding=2)
-    ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0)
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0,
+               label="relative MSE = 1 (error as large as the true value)")
     chance_key = f"chance_{metric}"
     first_summary = next(iter(summary_by_noise.values()))       # chance does not depend on noise
     chance = [first_summary[chance_key][name] for name in param_names]
@@ -479,7 +480,8 @@ def plot_relative_mse_distribution(summary_by_noise: dict, save_path: Path,
                        zorder=5, label="mean over voxels" if (i == 0 and name == param_names[0]) else None)
         ax.axhline(first_summary["chance_relative_mse"][name], color="black", linewidth=2.2,
                    zorder=4, label="chance (uniform grid guess)" if name == param_names[0] else None)
-        ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0)
+        ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0,
+                   label="relative MSE = 1 (error as large as the true value)" if name == param_names[0] else None)
         ax.set_yscale("log")
         ax.set_xticks(range(len(noise_levels)))
         ax.set_xticklabels(noise_levels)
@@ -542,7 +544,8 @@ def plot_relative_mse_by_true_value(summary_by_noise: dict, true_params: np.ndar
         chance = float((((levels - level) / level) ** 2).mean())
         ax.hlines(chance, g - 0.45, g + 0.45, color="black", linewidth=2.2, zorder=4,
                   label="chance (uniform grid guess)" if g == 0 else None)
-    ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0)
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0,
+               label="relative MSE = 1 (error as large as the true value)")
     ax.set_yscale("log")
     ax.set_xticks(range(len(levels)))
     ax.set_xticklabels([f"{level:g}\n(n={int(np.isclose(true_value, level).sum())})"
@@ -557,6 +560,96 @@ def plot_relative_mse_by_true_value(summary_by_noise: dict, true_params: np.ndar
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Relative MSE by true %s plot saved -> %s", param_name, save_path.resolve())
+
+
+def recovered_level_fractions(true_value: np.ndarray, recovered_value: np.ndarray,
+                              levels: np.ndarray, log_spaced: bool) -> np.ndarray:
+    """Which grid level was recovered for each true level.
+
+    Parameters
+    ----------
+    true_value : np.ndarray, shape (n_voxels,)
+    recovered_value : np.ndarray, shape (n_voxels, n_repeats)
+        Snapped to the nearest grid level (log distance if log_spaced).
+    levels : np.ndarray, shape (n_levels,)
+
+    Returns
+    -------
+    np.ndarray, shape (n_levels, n_levels)
+        [true level, recovered level] = share of the recoveries of the voxels with that true
+        level (rows sum to 1; NaN for a level no voxel has).
+    """
+    true_idx = _level_index(true_value, levels, log_spaced)                  # (n_voxels,)
+    recovered_idx = _level_index(recovered_value, levels, log_spaced)        # (n_voxels, n_repeats)
+    fractions = np.full((len(levels), len(levels)), np.nan)
+    for level_i in range(len(levels)):
+        recovered_of_level = recovered_idx[true_idx == level_i].ravel()
+        if recovered_of_level.size:
+            fractions[level_i] = np.bincount(recovered_of_level, minlength=len(levels)) / recovered_of_level.size
+    return fractions
+
+
+def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_noise: dict,
+                                      candidate_params: np.ndarray, save_path: Path,
+                                      param_name: str = "tau_ms", n_repeats: Optional[int] = None) -> None:
+    """Which levels of param_name get recovered: one column per noise level.
+
+    Top: share of the recoveries for each TRUE level (rows) that landed on each RECOVERED level
+    (columns); the diagonal is a correct recovery. Bottom: share of all recoveries per recovered
+    level, the dashed line is a uniform guess (1 / number of levels).
+    recovered_by_noise : {noise: (n_voxels, n_repeats, 4)}
+    """
+    p = PARAM_NAMES.index(param_name)
+    levels = np.unique(candidate_params[:, p])
+    log_spaced = param_name in LOG_SPACED_PARAMS
+    noise_levels = list(recovered_by_noise)
+    n_levels = len(levels)
+    level_labels = [f"{level:g}" for level in levels]
+    true_labels = [f"{level:g}\n(n={int(np.isclose(true_params[:, p], level).sum())})" for level in levels]
+    level_colors = {"low": "forestgreen", "mid": "darkorange", "high": "firebrick"}
+
+    fig, axes = plt.subplots(2, len(noise_levels), figsize=(4.6 * len(noise_levels) + 0.8, 8.2),
+                             gridspec_kw={"height_ratios": [3, 1.4]}, squeeze=False)
+    for col, noise in enumerate(noise_levels):
+        recovered_value = recovered_by_noise[noise][:, :, p]
+        fractions = recovered_level_fractions(true_params[:, p], recovered_value, levels, log_spaced)
+        ax = axes[0, col]
+        image = ax.imshow(fractions, vmin=0.0, vmax=1.0, cmap="viridis", aspect="auto")
+        for i in range(n_levels):
+            for j in range(n_levels):
+                if np.isfinite(fractions[i, j]) and fractions[i, j] >= 0.02:
+                    ax.text(j, i, f"{100 * fractions[i, j]:.0f}", ha="center", va="center", fontsize=8,
+                            color="white" if fractions[i, j] < 0.6 else "black")
+        ax.set_xticks(range(n_levels))
+        ax.set_xticklabels(level_labels)
+        ax.set_yticks(range(n_levels))
+        ax.set_yticklabels(true_labels if col == 0 else [])
+        ax.set_title(f"{noise} noise")
+        ax.set_xlabel(f"recovered {param_name}")
+        if col == 0:
+            ax.set_ylabel(f"true {param_name} (n = voxels)")
+        overall = np.bincount(_level_index(recovered_value, levels, log_spaced).ravel(),
+                              minlength=n_levels) / recovered_value.size
+        bar_ax = axes[1, col]
+        bar_ax.bar(range(n_levels), overall, color=level_colors.get(noise, "steelblue"))
+        bar_ax.axhline(1 / n_levels, color="black", linestyle="--", linewidth=0.8,
+                       label=f"uniform random guess ({100 / n_levels:.1f} % per level)")
+        bar_ax.legend(loc="upper right", fontsize=7)
+        bar_ax.set_xticks(range(n_levels))
+        bar_ax.set_xticklabels(level_labels)
+        bar_ax.set_ylim(0, max(overall.max() * 1.15, 1.2 / n_levels))
+        bar_ax.set_xlabel(f"recovered {param_name}")
+        if col == 0:
+            bar_ax.set_ylabel("share of all recoveries")
+    fig.colorbar(image, ax=axes[0, :].tolist(), label="share of the recoveries of that true level",
+                 shrink=0.8, pad=0.02)
+    size = f" ({n_repeats:,} repeats per voxel)" if n_repeats else ""
+    fig.suptitle(f"Recovered {param_name}: true vs recovered level, in % per true level{size}")
+    fig.text(0.5, 0.005, "Top: each row sums to 100 % (values under 2 % not printed); the diagonal is a correct "
+             "recovery. Bottom: bars = share of all recoveries per recovered level.", ha="center", fontsize=8)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Recovered %s distribution plot saved -> %s", param_name, save_path.resolve())
 
 
 def save_margin_table(true_params: np.ndarray, result: dict, save_path: Path) -> None:

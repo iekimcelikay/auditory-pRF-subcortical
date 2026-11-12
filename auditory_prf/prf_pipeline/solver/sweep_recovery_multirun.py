@@ -25,6 +25,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from auditory_prf.prf_pipeline.hrf import SUBCORTICAL_PARAMS, build_hrf_kernel
 from auditory_prf.prf_pipeline.run_assembly_sweeps import (
@@ -54,6 +56,7 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     clean_margins,
     plot_relative_mse,
     plot_relative_mse_by_true_value,
+    plot_recovered_level_distribution,
     plot_relative_mse_distribution,
     sample_ground_truths,
     save_margin_table,
@@ -358,7 +361,7 @@ def run_recovery_multirun(
 METHOD_LABELS = {"1run": "1 run", "24run_joint": "24 runs, joint fit",
                  "24run_random_effects": "24 runs, random effects"}
 METHOD_COLORS = {"1run": "gray", "24run_joint": "steelblue", "24run_random_effects": "mediumpurple"}
-NOISE_COLORS = {"low": "forestgreen", "mid": "darkorange", "high": "firebrick"}
+NOISE_COLORS = {"none": "dimgray", "low": "forestgreen", "mid": "darkorange", "high": "firebrick"}
 SPREAD_AXIS_LABELS = {"cf_index": "cf_index (ln Hz)", "alpha": "alpha (ln)", "tau_ms": "tau_ms (ln)",
                       "w": "w"}
 
@@ -437,7 +440,8 @@ def plot_run_comparison(summary_by_method: dict, save_path: Path, n_voxels: Opti
         ax.hlines(first_summary["chance_relative_mse"][name], x[0] - 0.5 * width,
                   x[-1] + (len(methods) - 0.5) * width, color="black", linewidth=2.2, zorder=4,
                   label="chance (uniform grid guess)" if ax is axes[0] else None)
-        ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0)
+        ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, zorder=0,
+                   label="relative MSE = 1 (error as large as the true value)" if ax is axes[0] else None)
         ax.set_yscale("log")
         ax.set_xticks(x + width * (len(methods) - 1) / 2)
         ax.set_xticklabels(noise_levels)
@@ -455,6 +459,17 @@ def plot_run_comparison(summary_by_method: dict, save_path: Path, n_voxels: Opti
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Run comparison plot saved -> %s", Path(save_path).resolve())
+
+
+def _spread_legend_handles(noise_levels: list) -> tuple:
+    """Legend of the spread plots: one patch per noise level, the chance line, the voxel dot."""
+    handles = [Patch(facecolor="none", edgecolor=NOISE_COLORS.get(noise, "steelblue"), linewidth=2,
+                     label=f"{noise} noise: box = quartiles, bar = median") for noise in noise_levels]
+    handles.append(Line2D([], [], color="black", linewidth=2.2,
+                          label="chance (SD of a uniform guess over the grid levels)"))
+    handles.append(Line2D([], [], marker="o", linestyle="", color="gray", markersize=4,
+                          label="one voxel (median over its repeats)"))
+    return handles
 
 
 def save_spread_table(spread_by_noise: dict, chance_spread_by_param: np.ndarray,
@@ -492,8 +507,7 @@ def plot_estimate_spread(spread_by_noise: dict, chance_spread_by_param: np.ndarr
                        capprops=dict(color=color), medianprops=dict(color=color, linewidth=2))
             ax.scatter(i + rng.uniform(-0.18, 0.18, size=len(per_voxel)), per_voxel, s=9, alpha=0.55,
                        color=color, linewidths=0, zorder=3)
-        ax.axhline(chance_spread_by_param[p], color="black", linewidth=2.2, zorder=4,
-                   label="chance (uniform grid guess)" if p == 0 else None)
+        ax.axhline(chance_spread_by_param[p], color="black", linewidth=2.2, zorder=4)
         ax.set_xticks(range(len(noise_levels)))
         ax.set_xticklabels(noise_levels)
         ax.set_xlim(-0.6, len(noise_levels) - 0.4)
@@ -502,13 +516,62 @@ def plot_estimate_spread(spread_by_noise: dict, chance_spread_by_param: np.ndarr
         ax.set_ylim(0, 1.12 * top)                                  # headroom above the chance line
         ax.set_title(SPREAD_AXIS_LABELS[name])
     axes[0].set_ylabel("spread of the 24 per-run estimates (SD)")
-    axes[0].legend(loc="lower right", fontsize=7)
+    fig.legend(handles=_spread_legend_handles(noise_levels), loc="lower center", ncol=2, fontsize=8,
+               frameon=False, bbox_to_anchor=(0.5, -0.12))
     size = f" (N={n_voxels} voxels, {n_repeats:,} MC repeats each)" if n_voxels and n_repeats else ""
     fig.suptitle(f"Width of the 24 per-run estimates{size}")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Estimate spread plot saved -> %s", Path(save_path).resolve())
+
+
+def plot_spread_by_true_value(spread_by_noise: dict, true_params: np.ndarray,
+                              chance_spread_by_param: np.ndarray, candidate_params: np.ndarray,
+                              save_path: Path, param_name: str = "tau_ms",
+                              n_repeats: Optional[int] = None) -> None:
+    """Spread of the 24 per-run estimates grouped by the TRUE value of one parameter (default tau_ms).
+
+    One group per grid level, one box per noise level; every dot is a voxel with that true value
+    (the median over its repeats of the standard deviation across the 24 runs, in the space of the
+    averaging); black line = spread of a uniform guess over the grid levels.
+    spread_by_noise : {noise: (n_voxels, n_repeats, 4)} from ``estimate_spread``.
+    """
+    p = PARAM_NAMES.index(param_name)
+    levels = np.unique(candidate_params[:, p])
+    true_value = true_params[:, p]
+    noise_levels = list(spread_by_noise)
+    offsets = (np.arange(len(noise_levels)) - (len(noise_levels) - 1) / 2) * 0.27
+    rng = np.random.default_rng(0)                              # fixed jitter, reproducible figure
+
+    fig, ax = plt.subplots(figsize=(1.3 * len(levels) + 5, 4.8))
+    for g, level in enumerate(levels):
+        in_group = np.isclose(true_value, level)
+        for i, noise in enumerate(noise_levels):
+            if not in_group.any():
+                continue
+            per_voxel = np.median(spread_by_noise[noise][in_group][:, :, p], axis=1)
+            color = NOISE_COLORS.get(noise, "steelblue")
+            ax.boxplot(per_voxel, positions=[g + offsets[i]], widths=0.22, showfliers=False,
+                       manage_ticks=False, boxprops=dict(color=color), whiskerprops=dict(color=color),
+                       capprops=dict(color=color), medianprops=dict(color=color, linewidth=2))
+            ax.scatter(g + offsets[i] + rng.uniform(-0.07, 0.07, size=len(per_voxel)), per_voxel,
+                       s=9, alpha=0.6, color=color, linewidths=0, zorder=3)
+    ax.axhline(chance_spread_by_param[p], color="black", linewidth=2.2, zorder=4)
+    ax.set_xticks(range(len(levels)))
+    ax.set_xticklabels([f"{level:g}\n(n={int(np.isclose(true_value, level).sum())})" for level in levels])
+    ax.set_xlim(-0.6, len(levels) - 0.4)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel(f"true {param_name} (n = voxels with that true value)")
+    ax.set_ylabel(f"spread of the 24 per-run estimates\n(SD, {SPREAD_AXIS_LABELS[param_name]})")
+    ax.legend(handles=_spread_legend_handles(noise_levels), loc="upper left",
+              bbox_to_anchor=(1.01, 1.0), fontsize=8)
+    size = f" ({n_repeats:,} MC repeats per voxel)" if n_repeats else ""
+    ax.set_title(f"Width of the 24 per-run {param_name} estimates by true {param_name}{size}")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Spread by true %s plot saved -> %s", param_name, Path(save_path).resolve())
 
 
 # ── Report and command line ───────────────────────────────────────────────────
@@ -522,7 +585,7 @@ def recover_and_report(
     hrf_kernel: np.ndarray,
     candidate_params: np.ndarray,
     template_per_run: list,
-    baseline_dir: Path,
+    baseline_dir: Optional[Path],
     output_dir: Path,
     noise_levels: list,
     n_voxels: int,
@@ -534,6 +597,11 @@ def recover_and_report(
 
     Ground truths: the same on-grid draw as ``sweep_recovery`` (``default_rng(MC_SEED)``), so the
     voxels equal the single-run results used as baseline.
+
+    Noise level ``"none"`` is the noise-free test: every repeat is identical, so use
+    ``n_repeats=1``; there is no single-run result file for it, so the "1-run" column is the
+    estimate from run 1 alone in the same call, and ``baseline_dir`` may be None if every noise
+    level is ``"none"``.
 
     Returns
     -------
@@ -553,10 +621,14 @@ def recover_and_report(
                                        candidate_params, n_voxels)
 
     # load the baselines first: a mismatch should stop the job before the expensive recovery
+    needs_baseline = [noise for noise in noise_levels if noise != "none"]
+    assert baseline_dir is not None or not needs_baseline, \
+        f"baseline_dir is required for the noise levels {needs_baseline}"
     baselines = {noise: load_baseline_results(baseline_dir, noise, n_repeats, true_params)
-                 for noise in noise_levels}
+                 for noise in needs_baseline}
 
     summary_by_method = {"1run": {}, "24run_joint": {}, "24run_random_effects": {}}
+    recovered_by_method = {"1run": {}, "joint": {}, "random_effects": {}}   # for the tau heatmaps
     estimate_summary = {estimate: {} for estimate in ESTIMATES}
     accuracy = {estimate: {} for estimate in ESTIMATES}
     spread_by_noise = {}
@@ -567,22 +639,27 @@ def recover_and_report(
             raw_psth_by_seq, run_designs, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
             candidate_params, template_matrix_norm, template_per_run_norm, true_params, noise,
             n_repeats, cf_list_hz, n_workers)
-        baseline = baselines[noise]
-
-        identical = float(np.mean(np.all(
-            result["recovered_first_run"] == baseline["recovered_params"], axis=-1)))
-        logger.info("baseline check [%s]: %.3f of the run-1-alone estimates are identical to the "
-                    "single-run results", noise, identical)
-        baseline_params = baseline["recovered_params"]
-        if identical < 1.0:
-            logger.warning("[%s] run 1 alone differs from the single-run results; using the run-1 "
-                           "estimates of this run as the 1-run baseline", noise)
-            baseline_params = result["recovered_first_run"]
-
-        baseline_result = {"recovered_params": baseline_params, "margins": baseline["margins"],
-                           "n_ties": baseline["n_ties"]}
+        if noise == "none":     # no single-run result file: run 1 alone of this call is the 1-run column
+            baseline_result = {"recovered_params": result["recovered_first_run"],
+                               "margins": result["margins"], "n_ties": result["n_ties"]}
+        else:
+            baseline = baselines[noise]
+            identical = float(np.mean(np.all(
+                result["recovered_first_run"] == baseline["recovered_params"], axis=-1)))
+            logger.info("baseline check [%s]: %.3f of the run-1-alone estimates are identical to the "
+                        "single-run results", noise, identical)
+            baseline_params = baseline["recovered_params"]
+            if identical < 1.0:
+                logger.warning("[%s] run 1 alone differs from the single-run results; using the run-1 "
+                               "estimates of this run as the 1-run baseline", noise)
+                baseline_params = result["recovered_first_run"]
+            baseline_result = {"recovered_params": baseline_params, "margins": baseline["margins"],
+                               "n_ties": baseline["n_ties"]}
         recovered = {"joint": result["recovered_params"],
                      "random_effects": result["recovered_random_effects"]}
+        recovered_by_method["1run"][noise] = baseline_result["recovered_params"]
+        for estimate in ESTIMATES:
+            recovered_by_method[estimate][noise] = recovered[estimate]
         summaries = {"1run": summarize(true_params, baseline_result, candidate_params, cf_list_hz)}
         for estimate in ESTIMATES:     # the random-effects result reuses the joint margins and ties
             summaries[f"24run_{estimate}"] = summarize(
@@ -626,12 +703,20 @@ def recover_and_report(
         plot_relative_mse_by_true_value(
             estimate_summary[estimate], true_params, candidate_params,
             run_dir / f"relative_mse_by_tau_{estimate}.png", param_name="tau_ms", n_repeats=n_repeats)
+    for method, recovered_by_noise in recovered_by_method.items():      # true-vs-recovered tau heatmaps
+        plot_recovered_level_distribution(
+            true_params, recovered_by_noise, candidate_params,
+            run_dir / f"recovered_tau_distribution_{method}.png", param_name="tau_ms",
+            n_repeats=n_repeats)
     save_run_comparison_table(summary_by_method, run_dir / "run_comparison_table.csv")
     plot_run_comparison(summary_by_method, run_dir / "run_comparison.png", n_voxels, n_repeats)
     save_spread_table(spread_by_noise, chance_spread(candidate_params, cf_list_hz),
                       run_dir / "spread_table.csv")
     plot_estimate_spread(spread_by_noise, chance_spread(candidate_params, cf_list_hz),
                          run_dir / "estimate_spread.png", n_voxels, n_repeats)
+    plot_spread_by_true_value(spread_by_noise, true_params, chance_spread(candidate_params, cf_list_hz),
+                              candidate_params, run_dir / "estimate_spread_by_tau.png",
+                              param_name="tau_ms", n_repeats=n_repeats)
     logger.info("done -> %s", run_dir.resolve())
     return run_dir
 
@@ -650,11 +735,13 @@ def _build_parser() -> argparse.ArgumentParser:
     recover = commands.add_parser("recover", help="24-run recovery (joint fit and random effects)")
     recover.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
     recover.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
-    recover.add_argument("--baseline-dir", required=True,
-                         help="folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz")
+    recover.add_argument("--baseline-dir", default=None,
+                         help="folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz "
+                              "(required unless --noise is only 'none')")
     recover.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     recover.add_argument("--noise", nargs="+", default=["low", "mid", "high"],
-                         choices=["low", "mid", "high"])
+                         choices=["none", "low", "mid", "high"],
+                         help="'none' = noise-free test (use --n-repeats 1)")
     recover.add_argument("--n-voxels", type=int, default=N_VOXELS)
     recover.add_argument("--n-repeats", type=int, default=N_REPEATS)
     recover.add_argument("--design-seeds", type=int, nargs="+", default=list(RUN_DESIGN_SEEDS))
@@ -677,12 +764,15 @@ def main(argv: Optional[list] = None) -> None:
         save_run_grid(Path(args.output_dir) / f"run_grid_design{args.design_seed}.npz",
                       candidate_params, template_matrix)
     else:
+        if args.baseline_dir is None and any(noise != "none" for noise in args.noise):
+            raise SystemExit("--baseline-dir is required unless --noise is only 'none'")
         run_designs, total_run_dur_s = build_run_designs(args.design_seeds)
         candidate_params, template_per_run = load_run_grids(Path(args.grid_dir), args.design_seeds)
         recover_and_report(
             raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
             design.SILENCE_SEQ_ID, hrf_kernel, candidate_params, template_per_run,
-            Path(args.baseline_dir), Path(args.output_dir), list(dict.fromkeys(args.noise)),
+            Path(args.baseline_dir) if args.baseline_dir else None, Path(args.output_dir),
+            list(dict.fromkeys(args.noise)),
             args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers)
 
 

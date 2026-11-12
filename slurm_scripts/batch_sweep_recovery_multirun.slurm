@@ -30,6 +30,10 @@
 #   BASELINE_DIR=<folder> NOISE=low N_VOXELS=3 N_REPEATS=5 sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
 # Full run:
 #   BASELINE_DIR=<folder> sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
+# Noise-free test (no noise, so one repeat is the whole experiment; no baseline folder needed;
+# small request so that it does not wait in the queue):
+#   NOISE=none N_REPEATS=1 sbatch --cpus-per-task=16 --mem=32G --time=00:30:00 \
+#       slurm_scripts/batch_sweep_recovery_multirun.slurm
 #
 # --time=01:00:00 is only a ceiling. Expected run time roughly 10-15 min for the full run
 # (about 2.3 core-hours of work for the joint fit and about as much for the per-run matching,
@@ -38,9 +42,14 @@
 NOISE=${NOISE:-"low mid high"}
 N_VOXELS=${N_VOXELS:-100}
 N_REPEATS=${N_REPEATS:-1000}
-if [ -z "$BASELINE_DIR" ]; then
-    echo "BASELINE_DIR is not set (folder with the single-run sweep_recovery_results_design1000_*.npz)" >&2
+if [ -z "$BASELINE_DIR" ] && [ "$NOISE" != "none" ]; then
+    echo "BASELINE_DIR is not set (folder with the single-run sweep_recovery_results_design1000_*.npz;" \
+         "only NOISE=none can run without it)" >&2
     exit 2
+fi
+BASELINE_ARGS=()
+if [ -n "$BASELINE_DIR" ]; then
+    BASELINE_ARGS=(--baseline-dir "$BASELINE_DIR")
 fi
 
 # Print job information
@@ -64,7 +73,7 @@ conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.sol
     recover \
     --results-dir models_output/sweep_design_erb_3band/combined \
     --grid-dir sweep_recovery_multirun_grids \
-    --baseline-dir "$BASELINE_DIR" \
+    "${BASELINE_ARGS[@]}" \
     --output-dir sweep_recovery_results \
     --noise $NOISE \
     --n-voxels $N_VOXELS \
