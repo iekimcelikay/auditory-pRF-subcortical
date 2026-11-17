@@ -34,6 +34,7 @@ from auditory_prf.prf_pipeline.run_assembly_sweeps import (
     load_raw_psths,
     run_sweep_forward_model,
 )
+from auditory_prf.prf_pipeline.solver.additive_noise import NOISE_MODELS, signal_scale_for
 from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
 from auditory_prf.prf_pipeline.solver.grid_recovery import (
     MC_SEED,
@@ -239,6 +240,7 @@ def draw_multirun_measurement(
     voxel_index: int,
     repeat_index: int,
     jitter: Optional[list] = NOISE_JITTER,
+    signal_scale: Optional[float] = None,
 ) -> np.ndarray:
     """One noisy experiment: independent noise per run, each run mean-removed, concatenated.
 
@@ -250,6 +252,9 @@ def draw_multirun_measurement(
     clean_bold_per_run : list of np.ndarray, each (n_tr,)
     noise : str
         'low' | 'mid' | 'high', or 'none' for the clean BOLD.
+    signal_scale : float or None
+        None: legacy per-voxel noise scaling; a number: additive noise on a signal scaled by it
+        (``additive_noise.SIGNAL_SCALE``).
 
     Returns
     -------
@@ -259,7 +264,7 @@ def draw_multirun_measurement(
     assert len({len(bold) for bold in clean_bold_per_run}) == 1, "runs differ in length"
     run_seeds = spawn_noise_seeds(MC_SEED, voxel_index, repeat_index, n_runs=n_runs)
     noisy_per_run = draw_noisy_measurement(clean_bold_per_run, noise, tr_s, run_seeds,
-                                           jitter=jitter).reshape(n_runs, -1)
+                                           jitter=jitter, signal_scale=signal_scale).reshape(n_runs, -1)
     return (noisy_per_run - noisy_per_run.mean(axis=1, keepdims=True)).ravel()
 
 
@@ -279,7 +284,8 @@ def _recover_one_voxel_multirun(v_i: int, true_row: np.ndarray, state: dict) -> 
     measurements = np.empty((n_repeats, n_runs * n_tr), dtype=np.float32)
     for rep in range(n_repeats):
         measurements[rep, :] = draw_multirun_measurement(
-            clean_bold_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"])
+            clean_bold_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"],
+            signal_scale=state.get("signal_scale"))
 
     # per run on its own first: best_match_indices normalises its input in place, so pass copies
     per_run_idx = np.empty((n_repeats, n_runs), dtype=np.int64)
@@ -311,6 +317,7 @@ def run_recovery_multirun(
     cf_list_hz: np.ndarray,
     n_workers: int = 1,
     jitter: Optional[list] = NOISE_JITTER,
+    signal_scale: Optional[float] = None,
 ) -> dict:
     """Monte Carlo recovery from all runs, one noise level: joint fit and random effects.
 
@@ -336,7 +343,7 @@ def run_recovery_multirun(
                  hrf_kernel=hrf_kernel, candidate_params=candidate_params,
                  template_matrix_norm=template_matrix_norm,
                  template_per_run_norm=template_per_run_norm, noise=noise, n_repeats=n_repeats,
-                 jitter=jitter)
+                 jitter=jitter, signal_scale=signal_scale)
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel_multirun, true_params, state, n_workers))
     else:
@@ -381,7 +388,8 @@ def load_baseline_results(baseline_dir: Path, noise: str, n_repeats: int,
 
     Returns
     -------
-    dict with recovered_params (n_voxels, n_repeats, 4), margins (n_voxels, 4), n_ties (n_voxels,)
+    dict with recovered_params (n_voxels, n_repeats, 4), margins (n_voxels, 4), n_ties (n_voxels,) and
+    noise_model ('additive' | 'legacy'; files without the key were made with the legacy noise)
     """
     paths = sorted(Path(baseline_dir).glob(f"sweep_recovery_results_design1000_{noise}_*.npz"))
     assert len(paths) == 1, f"expected one baseline file for '{noise}' in {baseline_dir}, found {paths}"
@@ -393,8 +401,10 @@ def load_baseline_results(baseline_dir: Path, noise: str, n_repeats: int,
             f"{paths[0].name} has {baseline['true_params'].shape[0]} voxels, need {n_voxels}")
         assert np.allclose(baseline["true_params"][:n_voxels], true_params), (
             f"{paths[0].name}: other ground-truth voxels")
+        noise_model = str(baseline["noise_model"]) if "noise_model" in baseline.files else "legacy"
         return {"recovered_params": baseline["recovered_params"][:n_voxels, :n_repeats, :],
-                "margins": baseline["margins"][:n_voxels], "n_ties": baseline["n_ties"][:n_voxels]}
+                "margins": baseline["margins"][:n_voxels], "n_ties": baseline["n_ties"][:n_voxels],
+                "noise_model": noise_model}
 
 
 def save_run_comparison_table(summary_by_method: dict, save_path: Path) -> None:
@@ -592,8 +602,12 @@ def recover_and_report(
     n_repeats: int,
     design_seeds: Sequence[int],
     n_workers: int = 1,
+    signal_scale: Optional[float] = None,
 ) -> Path:
     """Run the 24-run recovery at every noise level and write all tables, plots and result files.
+
+    ``signal_scale``: None = legacy per-voxel noise scaling; ``additive_noise.SIGNAL_SCALE`` = MATLAB-style
+    additive noise. The single-run baseline has to be made with the same noise model.
 
     Ground truths: the same on-grid draw as ``sweep_recovery`` (``default_rng(MC_SEED)``), so the
     voxels equal the single-run results used as baseline.
@@ -612,8 +626,9 @@ def recover_and_report(
                f"{timestamp}_{'-'.join(noise_levels)}_on_grid_{len(design_seeds)}runs")
     run_dir.mkdir(parents=True, exist_ok=True)
     first_seed = design_seeds[0]
-    logger.info("noise=%s voxels=%d repeats=%d runs=%d workers=%d -> %s", noise_levels, n_voxels,
-                n_repeats, len(design_seeds), n_workers, run_dir)
+    noise_model = "legacy" if signal_scale is None else "additive"
+    logger.info("noise=%s (%s model) voxels=%d repeats=%d runs=%d workers=%d -> %s", noise_levels,
+                noise_model, n_voxels, n_repeats, len(design_seeds), n_workers, run_dir)
 
     template_matrix_norm = concatenate_templates(template_per_run)
     template_per_run_norm = normalize_run_templates(template_per_run)
@@ -638,12 +653,16 @@ def recover_and_report(
         result = run_recovery_multirun(
             raw_psth_by_seq, run_designs, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
             candidate_params, template_matrix_norm, template_per_run_norm, true_params, noise,
-            n_repeats, cf_list_hz, n_workers)
+            n_repeats, cf_list_hz, n_workers, signal_scale=signal_scale)
         if noise == "none":     # no single-run result file: run 1 alone of this call is the 1-run column
             baseline_result = {"recovered_params": result["recovered_first_run"],
                                "margins": result["margins"], "n_ties": result["n_ties"]}
         else:
             baseline = baselines[noise]
+            if baseline["noise_model"] != noise_model:
+                logger.warning("[%s] the single-run baseline was made with the '%s' noise, this run uses '%s': "
+                               "re-run the single-run recovery with --noise-model %s first", noise,
+                               baseline["noise_model"], noise_model, noise_model)
             identical = float(np.mean(np.all(
                 result["recovered_first_run"] == baseline["recovered_params"], axis=-1)))
             logger.info("baseline check [%s]: %.3f of the run-1-alone estimates are identical to the "
@@ -681,7 +700,7 @@ def recover_and_report(
                 else {"margins": result["margins"], "n_ties": result["n_ties"]}
             np.savez(run_dir / f"{RUN_PREFIX}_{estimate}_results_design{first_seed}_{noise}_{timestamp}.npz",
                      true_params=true_params, recovered_params=recovered[estimate],
-                     param_names=PARAM_NAMES, **saved)
+                     param_names=PARAM_NAMES, noise_model=noise_model, **saved)
             plot_recovery(true_params, recovered[estimate],
                           run_dir / f"recovery_scatter_{estimate}_{noise}.png", param_names=PARAM_NAMES)
             save_recovery_table(true_params, recovered[estimate],
@@ -746,6 +765,10 @@ def _build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--n-repeats", type=int, default=N_REPEATS)
     recover.add_argument("--design-seeds", type=int, nargs="+", default=list(RUN_DESIGN_SEEDS))
     recover.add_argument("--n-workers", type=int, default=n_workers_default)
+    recover.add_argument("--noise-model", choices=list(NOISE_MODELS), default="additive",
+                         help="additive: MATLAB-style noise added as is to the signal scaled by one global "
+                              "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
+                              "std(bold) per voxel (the earlier results)")
     return parser
 
 
@@ -773,7 +796,8 @@ def main(argv: Optional[list] = None) -> None:
             design.SILENCE_SEQ_ID, hrf_kernel, candidate_params, template_per_run,
             Path(args.baseline_dir) if args.baseline_dir else None, Path(args.output_dir),
             list(dict.fromkeys(args.noise)),
-            args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers)
+            args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers,
+            signal_scale=signal_scale_for(args.noise_model))
 
 
 if __name__ == "__main__":

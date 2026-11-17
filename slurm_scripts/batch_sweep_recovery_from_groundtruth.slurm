@@ -19,6 +19,10 @@
 # estimates. Each noise level is recovered against its own averaged ground truth. Voxels are spread
 # over all CPUs of the job.
 #
+# The noise model (additive | legacy) is read from each groundtruth_mean_<noise>.npz: the recovery noise
+# is added the same way the ground truth was built (no flag here). Ground truths made before the
+# additive noise existed are treated as legacy.
+#
 # Needs, on this machine:
 #   GROUNDTRUTH_DIR   folder written by batch_sweep_groundtruth_distribution.slurm, with
 #                     groundtruth_mean_<low|mid|high>.npz (the 4 GB distribution files are NOT read)

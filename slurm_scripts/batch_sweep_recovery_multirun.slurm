@@ -26,6 +26,11 @@
 #
 # Environment variables (BASELINE_DIR is required):
 #   BASELINE_DIR=<folder>   NOISE="low mid high" (default)   N_VOXELS=100   N_REPEATS=1000
+# NOISE_MODEL=additive|legacy (default additive): MATLAB-style noise added as is to the signal scaled by ONE
+# global best-case constant (see auditory-prf-docs-all/additive_noise_design.md). 'legacy' = the earlier
+# per-voxel scaling. All results made before the additive noise used 'legacy' and have to be re-run.
+# The single-run baseline in BASELINE_DIR has to be made with the same NOISE_MODEL (run
+# batch_sweep_recovery.slurm first); the log warns if it was not.
 # Smoke run first (3 voxels, 5 repeats; read the per-voxel time in the log):
 #   BASELINE_DIR=<folder> NOISE=low N_VOXELS=3 N_REPEATS=5 sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
 # Full run:
@@ -40,6 +45,7 @@
 # over 32 CPUs); to be measured in the smoke run, then check `seff <jobid>` and adjust.
 
 NOISE=${NOISE:-"low mid high"}
+NOISE_MODEL=${NOISE_MODEL:-additive}
 N_VOXELS=${N_VOXELS:-100}
 N_REPEATS=${N_REPEATS:-1000}
 if [ -z "$BASELINE_DIR" ] && [ "$NOISE" != "none" ]; then
@@ -58,7 +64,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "noise=$NOISE n_voxels=$N_VOXELS n_repeats=$N_REPEATS baseline=$BASELINE_DIR"
+echo "noise=$NOISE noise_model=$NOISE_MODEL n_voxels=$N_VOXELS n_repeats=$N_REPEATS baseline=$BASELINE_DIR"
 echo "==================================="
 
 module load Miniforge3
@@ -76,6 +82,7 @@ conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.sol
     "${BASELINE_ARGS[@]}" \
     --output-dir sweep_recovery_results \
     --noise $NOISE \
+    --noise-model $NOISE_MODEL \
     --n-voxels $N_VOXELS \
     --n-repeats $N_REPEATS \
     --n-workers $SLURM_CPUS_PER_TASK

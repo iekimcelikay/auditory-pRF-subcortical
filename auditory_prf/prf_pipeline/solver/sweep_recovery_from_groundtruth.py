@@ -22,6 +22,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+from auditory_prf.prf_pipeline.solver.additive_noise import NOISE_MODELS
 from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
 from auditory_prf.prf_pipeline.solver.grid_recovery import MC_SEED, plot_recovery, save_recovery_table
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
@@ -75,7 +76,8 @@ def load_groundtruth(groundtruth_dir: Path, noise: str) -> dict:
     -------
     dict with ``groundtruth_bold`` (n_voxels, n_runs, n_tr) float32, ``true_params`` (n_voxels, 4),
     ``cf_list_hz`` (n_cf,), ``jitter`` (list of 3 floats), ``n_repeats`` (int), ``tr_s`` (float),
-    ``design_seeds`` (list of int).
+    ``design_seeds`` (list of int), ``noise_model`` ('additive' | 'legacy'; files from before the additive
+    noise were built with the legacy noise).
     """
     path = Path(groundtruth_dir) / f"groundtruth_mean_{noise}.npz"
     if not path.exists():
@@ -87,8 +89,16 @@ def load_groundtruth(groundtruth_dir: Path, noise: str) -> dict:
             f"{path.name} was built for noise level '{saved['noise']}', not '{noise}'")
         return {"groundtruth_bold": saved["groundtruth_bold"], "true_params": saved["true_params"],
                 "cf_list_hz": saved["cf_list_hz"], "jitter": [float(x) for x in saved["jitter"]],
+                "noise_model": str(saved["noise_model"]) if "noise_model" in saved.files else "legacy",
                 "n_repeats": int(saved["n_repeats"]), "tr_s": float(saved["tr_s"]),
                 "design_seeds": [int(x) for x in saved["design_seeds"]]}
+
+
+def recovery_signal_scale(noise_model: str) -> Optional[float]:
+    """Signal scale for the recovery noise: the stored ground truth is already in fractions of the mean when
+    it was built with the additive noise, so the noise is added without rescaling it (1.0); legacy: None."""
+    assert noise_model in NOISE_MODELS, noise_model
+    return 1.0 if noise_model == "additive" else None
 
 
 def draw_recovery_measurement(
@@ -98,6 +108,7 @@ def draw_recovery_measurement(
     voxel_index: int,
     repeat_index: int,
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
+    signal_scale: Optional[float] = None,
 ) -> np.ndarray:
     """One noisy experiment from the averaged ground truth: independent noise per run, each run
     mean-removed, concatenated.
@@ -109,6 +120,9 @@ def draw_recovery_measurement(
     groundtruth_per_run : np.ndarray, shape (n_runs, n_tr)
     noise : str
         'low' | 'mid' | 'high', or 'none' for the ground truth without new noise.
+    signal_scale : float or None
+        ``recovery_signal_scale(noise_model)``: 1.0 = additive noise on a ground truth that is already in
+        fractions of the mean; None = legacy per-voxel noise scaling.
 
     Returns
     -------
@@ -117,7 +131,8 @@ def draw_recovery_measurement(
     n_runs = len(groundtruth_per_run)
     run_seeds = spawn_noise_seeds(MC_SEED, SEED_TAG_RECOVERY, voxel_index, repeat_index, n_runs=n_runs)
     noisy_per_run = draw_noisy_measurement(
-        list(groundtruth_per_run), noise, tr_s, run_seeds, jitter=jitter).reshape(n_runs, -1)
+        list(groundtruth_per_run), noise, tr_s, run_seeds, jitter=jitter,
+        signal_scale=signal_scale).reshape(n_runs, -1)
     return (noisy_per_run - noisy_per_run.mean(axis=1, keepdims=True)).ravel()
 
 
@@ -131,7 +146,8 @@ def _recover_one_voxel_groundtruth(v_i: int, true_row: np.ndarray, state: dict) 
     measurements = np.empty((n_repeats, n_runs * n_tr), dtype=np.float32)
     for rep in range(n_repeats):
         measurements[rep, :] = draw_recovery_measurement(
-            groundtruth_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"])
+            groundtruth_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"],
+            signal_scale=state.get("signal_scale"))
 
     # per run on its own first: best_match_indices normalises its input in place, so pass copies
     per_run_idx = np.empty((n_repeats, n_runs), dtype=np.int64)
@@ -160,6 +176,7 @@ def run_recovery_groundtruth(
     cf_list_hz: np.ndarray,
     n_workers: int = 1,
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
+    signal_scale: Optional[float] = None,
 ) -> dict:
     """Monte Carlo recovery from the averaged ground truth, one noise level: joint fit and random effects.
 
@@ -188,7 +205,7 @@ def run_recovery_groundtruth(
     state = dict(groundtruth_bold=groundtruth_bold, candidate_params=candidate_params,
                  template_matrix_norm=template_matrix_norm,
                  template_per_run_norm=template_per_run_norm, noise=noise, n_repeats=n_repeats,
-                 tr_s=tr_s, jitter=jitter)
+                 tr_s=tr_s, jitter=jitter, signal_scale=signal_scale)
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel_groundtruth, true_params, state, n_workers))
     else:
@@ -259,12 +276,13 @@ def recover_and_report_groundtruth(
         true_params = level_true_params
         n_voxels = len(true_params)
 
-        logger.info("noise '%s': %d voxels x %d repeats x %d runs ...", noise, n_voxels, n_repeats,
-                    len(design_seeds))
+        logger.info("noise '%s' (%s model): %d voxels x %d repeats x %d runs ...", noise,
+                    groundtruth["noise_model"], n_voxels, n_repeats, len(design_seeds))
         result = run_recovery_groundtruth(
             groundtruth["groundtruth_bold"], candidate_params, template_matrix_norm,
             template_per_run_norm, true_params, noise, n_repeats, groundtruth["tr_s"], cf_list_hz,
-            n_workers, groundtruth["jitter"])
+            n_workers, groundtruth["jitter"],
+            signal_scale=recovery_signal_scale(groundtruth["noise_model"]))
 
         recovered = {"joint": result["recovered_params"],
                      "random_effects": result["recovered_random_effects"]}
@@ -292,7 +310,7 @@ def recover_and_report_groundtruth(
                 else {"margins": result["margins"], "n_ties": result["n_ties"]}
             np.savez(run_dir / f"sweep_groundtruth_recovery_{estimate}_results_{noise}_{timestamp}.npz",
                      true_params=true_params, recovered_params=recovered[estimate],
-                     param_names=PARAM_NAMES, **saved)
+                     param_names=PARAM_NAMES, noise_model=groundtruth["noise_model"], **saved)
             plot_recovery(true_params, recovered[estimate],
                           run_dir / f"recovery_scatter_{estimate}_{noise}.png", param_names=PARAM_NAMES)
             save_recovery_table(true_params, recovered[estimate],

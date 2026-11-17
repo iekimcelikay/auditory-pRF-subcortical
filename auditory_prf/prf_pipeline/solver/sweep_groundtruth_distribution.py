@@ -26,6 +26,7 @@ from auditory_prf.prf_pipeline.run_assembly_sweeps import (
     load_raw_psths,
     run_sweep_forward_model,
 )
+from auditory_prf.prf_pipeline.solver.additive_noise import NOISE_MODELS, signal_scale_for
 from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
 from auditory_prf.prf_pipeline.solver.grid_recovery import MC_SEED
 from auditory_prf.prf_pipeline.solver.parallel_recovery import map_voxels
@@ -89,6 +90,7 @@ def draw_groundtruth_repeat(
     voxel_index: int,
     repeat_index: int,
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
+    signal_scale: Optional[float] = None,
 ) -> np.ndarray:
     """One noisy copy of the clean runs: independent noise per run (not mean-removed).
 
@@ -99,6 +101,10 @@ def draw_groundtruth_repeat(
     clean_bold_per_run : np.ndarray, shape (n_runs, n_tr)
     noise : str
         'low' | 'mid' | 'high', or 'none' for the clean BOLD.
+    signal_scale : float or None
+        None: legacy per-voxel noise scaling (the copy stays in model units). A number
+        (``additive_noise.SIGNAL_SCALE``): additive noise on the signal scaled by it (the copy is in
+        fractions of the mean).
 
     Returns
     -------
@@ -107,7 +113,8 @@ def draw_groundtruth_repeat(
     n_runs = len(clean_bold_per_run)
     run_seeds = spawn_noise_seeds(MC_SEED, SEED_TAG_GROUNDTRUTH, voxel_index, repeat_index,
                                   n_runs=n_runs)
-    noisy = draw_noisy_measurement(list(clean_bold_per_run), noise, tr_s, run_seeds, jitter=jitter)
+    noisy = draw_noisy_measurement(list(clean_bold_per_run), noise, tr_s, run_seeds, jitter=jitter,
+                                   signal_scale=signal_scale)
     return noisy.reshape(n_runs, -1).astype(np.float32)
 
 
@@ -118,6 +125,7 @@ def _build_voxel_distribution(v_i: int, true_row: np.ndarray, state: dict) -> tu
     -------
     distribution : np.ndarray float32, shape (n_repeats, n_runs, n_tr)
     clean_bold_per_run : np.ndarray float32, shape (n_runs, n_tr)
+        In fractions of the mean (scaled) when ``state["signal_scale"]`` is set, else in model units.
     """
     clean_bold_per_run = compute_clean_bold_per_run(
         true_row, state["raw_psth_by_seq"], state["run_designs"], state["total_run_dur_s"],
@@ -126,8 +134,11 @@ def _build_voxel_distribution(v_i: int, true_row: np.ndarray, state: dict) -> tu
     distribution = np.empty((state["n_repeats"], n_runs, n_tr), dtype=np.float32)
     for repeat_index in range(state["n_repeats"]):
         distribution[repeat_index] = draw_groundtruth_repeat(
-            clean_bold_per_run, state["noise"], state["tr_s"], v_i, repeat_index, state["jitter"])
-    return distribution, clean_bold_per_run.astype(np.float32)
+            clean_bold_per_run, state["noise"], state["tr_s"], v_i, repeat_index, state["jitter"],
+            signal_scale=state.get("signal_scale"))
+    scale = state.get("signal_scale")
+    clean_out = clean_bold_per_run if scale is None else scale * clean_bold_per_run
+    return distribution, clean_out.astype(np.float32)
 
 
 # ── Distribution and its mean ─────────────────────────────────────────────────
@@ -159,6 +170,7 @@ def build_groundtruth_distribution(
     design_seeds: Sequence[int],
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
     n_workers: int = 1,
+    signal_scale: Optional[float] = None,
 ) -> dict:
     """Save the distribution of noisy signals of every voxel and its mean (the new ground truth).
 
@@ -174,6 +186,9 @@ def build_groundtruth_distribution(
         (cf_index, alpha, tau_ms, w) of every voxel.
     noise : str
         'low' | 'mid' | 'high' (or 'none' for a noise-free check).
+    signal_scale : float or None
+        None: legacy noise (model units). ``additive_noise.SIGNAL_SCALE``: additive noise; the saved
+        distribution, ground truth and ``clean_bold`` are then in fractions of the mean.
 
     Returns
     -------
@@ -185,7 +200,8 @@ def build_groundtruth_distribution(
     n_tr = int(round(total_run_dur_s / tr_s))
     state = dict(raw_psth_by_seq=raw_psth_by_seq, run_designs=run_designs,
                  total_run_dur_s=total_run_dur_s, tr_s=tr_s, silence_seq_id=silence_seq_id,
-                 hrf_kernel=hrf_kernel, noise=noise, n_repeats=n_repeats, jitter=jitter)
+                 hrf_kernel=hrf_kernel, noise=noise, n_repeats=n_repeats, jitter=jitter,
+                 signal_scale=signal_scale)
     distribution_path = output_dir / f"groundtruth_distribution_{noise}.npy"
     mean_path = output_dir / f"groundtruth_mean_{noise}.npz"
     logger.info("[%s] %d voxels x %d repeats x %d runs x %d TRs = %.2f GB -> %s", noise, n_voxels,
@@ -216,7 +232,9 @@ def build_groundtruth_distribution(
              clean_bold=clean_bold, true_params=true_params, cf_list_hz=cf_list_hz, noise=noise,
              jitter=np.asarray(jitter, dtype=float), n_repeats=n_repeats,
              design_seeds=np.asarray(design_seeds), seed_tag=SEED_TAG_GROUNDTRUTH, tr_s=tr_s,
-             param_names=np.asarray(PARAM_NAMES))
+             param_names=np.asarray(PARAM_NAMES),
+             noise_model="legacy" if signal_scale is None else "additive",
+             signal_scale=np.nan if signal_scale is None else signal_scale)
     logger.info("[%s] ground truth (mean of %d draws) saved -> %s", noise, n_repeats,
                 mean_path.resolve())
     return {"distribution_path": distribution_path, "mean_path": mean_path}
@@ -239,12 +257,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jitter", type=float, nargs=3, default=list(NOISE_JITTER_GROUNDTRUTH),
                         metavar=("FREQ", "AMP", "PHASE"), help="PmNoise jitter, fraction of nominal")
     parser.add_argument("--n-workers", type=int, default=n_workers_default)
+    parser.add_argument("--noise-model", choices=list(NOISE_MODELS), default="additive",
+                        help="additive: MATLAB-style noise added as is to the signal scaled by one global "
+                             "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
+                             "std(bold) per voxel (the earlier results)")
     return parser
 
 
 def main(argv: Optional[list] = None) -> None:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    signal_scale = signal_scale_for(args.noise_model)
     import stimuli.sweep_design_erb as design   # needs the project root on sys.path
     raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
@@ -255,14 +278,14 @@ def main(argv: Optional[list] = None) -> None:
 
     run_dir = (Path(args.output_dir) /
                f"{datetime.now():%Y%m%d_%H%M%S}_groundtruth_{len(args.design_seeds)}runs")
-    logger.info("noise=%s voxels=%d repeats=%d runs=%d jitter=%s workers=%d -> %s", args.noise,
-                args.n_voxels, args.n_repeats, len(args.design_seeds), args.jitter, args.n_workers,
-                run_dir)
+    logger.info("noise=%s (%s model, signal scale %s) voxels=%d repeats=%d runs=%d jitter=%s workers=%d -> %s",
+                args.noise, args.noise_model, signal_scale, args.n_voxels, args.n_repeats,
+                len(args.design_seeds), args.jitter, args.n_workers, run_dir)
     for noise in dict.fromkeys(args.noise):
         build_groundtruth_distribution(
             raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
             design.SILENCE_SEQ_ID, hrf_kernel, true_params, noise, args.n_repeats, run_dir,
-            args.design_seeds, jitter=args.jitter, n_workers=args.n_workers)
+            args.design_seeds, jitter=args.jitter, n_workers=args.n_workers, signal_scale=signal_scale)
     logger.info("done -> %s", run_dir.resolve())
 
 

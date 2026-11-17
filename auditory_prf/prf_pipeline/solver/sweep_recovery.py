@@ -54,6 +54,7 @@ from auditory_prf.prf_pipeline.run_assembly_sweeps import (
     sharpen_cf_rows,
     sweep_run_bold,
 )
+from auditory_prf.prf_pipeline.solver.additive_noise import NOISE_MODELS, signal_scale_for
 from auditory_prf.prf_pipeline.solver.forward_model import draw_noisy_measurement, spawn_noise_seeds
 from auditory_prf.prf_pipeline.solver.grid_recovery import (
     ALPHA_GRID,
@@ -239,7 +240,8 @@ def _recover_one_voxel(v_i: int, true_row: np.ndarray, state: dict) -> dict:
     for rep in range(n_repeats):
         run_seeds = spawn_noise_seeds(MC_SEED, v_i, rep, n_runs=1)
         measurements[rep, :] = draw_noisy_measurement([gt_bold], state["noise"], state["tr_s"],
-                                                      run_seeds, jitter=state["jitter"])
+                                                      run_seeds, jitter=state["jitter"],
+                                                      signal_scale=state.get("signal_scale"))
     best_idx = best_match_indices(state["template_matrix_norm"], measurements)
     result = clean_margins(gt_bold, state["template_matrix_norm"], state["candidate_params"])
     result["recovered"] = state["candidate_params"][best_idx]          # (n_repeats, n_params)
@@ -260,8 +262,15 @@ def run_recovery(
     n_repeats: int,
     n_workers: int = 1,
     jitter: Optional[list] = NOISE_JITTER,
+    signal_scale: Optional[float] = None,
 ) -> dict:
     """Monte Carlo recovery for one noise level.
+
+    Parameters
+    ----------
+    signal_scale : float or None
+        None: legacy per-voxel noise scaling. A number (``additive_noise.SIGNAL_SCALE``): MATLAB-style
+        additive noise on a signal scaled by this constant (see ``solver/additive_noise.py``).
 
     Returns
     -------
@@ -273,7 +282,7 @@ def run_recovery(
                  total_run_dur_s=total_run_dur_s, tr_s=tr_s, silence_seq_id=silence_seq_id,
                  hrf_kernel=hrf_kernel, candidate_params=candidate_params,
                  template_matrix_norm=template_matrix_norm, noise=noise, n_repeats=n_repeats,
-                 jitter=jitter)
+                 jitter=jitter, signal_scale=signal_scale)
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel, true_params, state, n_workers))
     else:
@@ -303,6 +312,7 @@ def run_noise_sweep(
     n_repeats_by_noise: dict,
     n_workers: int = 1,
     jitter: Optional[list] = NOISE_JITTER,
+    signal_scale: Optional[float] = None,
 ) -> dict:
     """run_recovery at every noise level on the SAME ground truths; {noise: result}."""
     results = {}
@@ -312,7 +322,7 @@ def run_noise_sweep(
         results[noise] = run_recovery(
             raw_psth_by_seq, run_design, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
             candidate_params, template_matrix_norm, true_params, noise,
-            n_repeats_by_noise[noise], n_workers, jitter)
+            n_repeats_by_noise[noise], n_workers, jitter, signal_scale)
     return results
 
 
@@ -669,7 +679,7 @@ def save_margin_table(true_params: np.ndarray, result: dict, save_path: Path) ->
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--results-dir", type=str,
                         default="models_output/sweep_design_erb_3band/combined")
@@ -687,8 +697,17 @@ def main() -> None:
                         default=int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)))
     parser.add_argument("--grid-file", type=str, default=None,
                         help="Load a saved candidate_grid_*.npz instead of rebuilding.")
-    args = parser.parse_args()
+    parser.add_argument("--noise-model", choices=list(NOISE_MODELS), default="additive",
+                        help="additive: MATLAB-style noise added as is to the signal scaled by one global "
+                             "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
+                             "std(bold) per voxel (the earlier results).")
+    return parser
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    signal_scale = signal_scale_for(args.noise_model)
 
     import stimuli.sweep_design_erb as design   # needs the project root on sys.path
     noise_levels = NOISE_LEVELS if "all" in args.noise else list(dict.fromkeys(args.noise))
@@ -698,8 +717,9 @@ def main() -> None:
     run_dir = (Path(args.output_dir) / f"{timestamp}_{'-'.join(noise_levels)}_"
                f"{args.gt_mode}_design{args.design_seed}")   # seed keeps array tasks apart
     run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("noise=%s gt_mode=%s voxels=%d repeats=%s workers=%d -> %s", noise_levels,
-                args.gt_mode, args.n_voxels, n_repeats_by_noise, args.n_workers, run_dir)
+    logger.info("noise=%s (%s model, signal scale %s) gt_mode=%s voxels=%d repeats=%s workers=%d -> %s",
+                noise_levels, args.noise_model, signal_scale, args.gt_mode, args.n_voxels,
+                n_repeats_by_noise, args.n_workers, run_dir)
 
     raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
     run_design = design.build_run_design(args.design_seed)
@@ -723,7 +743,7 @@ def main() -> None:
     results = run_noise_sweep(raw_psth_by_seq, run_design, total_run_dur_s, tr_s,
                               design.SILENCE_SEQ_ID, hrf_kernel, candidate_params,
                               template_matrix_norm, true_params, noise_levels,
-                              n_repeats_by_noise, args.n_workers)
+                              n_repeats_by_noise, args.n_workers, signal_scale=signal_scale)
 
     recovered_by_noise, accuracy_by_noise, summary_by_noise = {}, {}, {}
     for noise, result in results.items():
@@ -756,7 +776,7 @@ def main() -> None:
         # name follows replot_from_results.py: <prefix>_results_design<N>_<level>_<timestamp>.npz
         np.savez(run_dir / f"sweep_recovery_results_design{args.design_seed}_{noise}_{timestamp}.npz",
                  true_params=true_params, recovered_params=recovered,
-                 param_names=PARAM_NAMES,
+                 param_names=PARAM_NAMES, noise_model=args.noise_model,
                  **{k: v for k, v in result.items() if k != "recovered_params"})
         plot_recovery(true_params, recovered, run_dir / f"recovery_scatter_{noise}.png",
                       param_names=PARAM_NAMES)

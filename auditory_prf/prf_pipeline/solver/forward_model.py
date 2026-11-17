@@ -47,7 +47,7 @@ from auditory_prf.prf_pipeline.duration_models import apply_duration_gaussian_sc
 from auditory_prf.prf_pipeline.adaptrans_onoff_filters import build_prf_boxcar_train
 from auditory_prf.prf_pipeline.run_assembly import assemble_run_bold
 from auditory_prf.utils.result_saver import ResultSaver
-from prf_models.pm_noise import PmNoise, apply_bold_noise
+from prf_models.pm_noise import PmNoise, apply_additive_noise, apply_bold_noise
 
 
 def load_raw_sequences(results_dir: Union[str, Path]) -> tuple[dict, np.ndarray]:
@@ -280,6 +280,7 @@ def draw_noisy_measurement(
     tr_s: float,
     run_seeds: list,
     jitter=None,
+    signal_scale=None,
 ) -> np.ndarray:
     """Add one independent ``PmNoise`` draw per run, then concatenate.
 
@@ -301,6 +302,11 @@ def draw_noisy_measurement(
         ``PmNoise`` jitter [frequency, amplitude, phase] (Gaussian SD as a
         fraction of nominal, applied to the periodic noise components).
         ``None`` keeps the preset default (no jitter).
+    signal_scale : float or None, optional
+        ``None`` (default): legacy per-voxel noise scaling (``apply_bold_noise``: noise x std(bold) /
+        REFERENCE_BOLD_STD). A number: MATLAB-style additive noise (``apply_additive_noise``): the signal
+        is multiplied by ``signal_scale`` and the noise is added as is (``'none'`` then returns the scaled
+        clean signal). See ``solver/additive_noise.py``.
 
     Returns
     -------
@@ -308,11 +314,19 @@ def draw_noisy_measurement(
         Noisy BOLD, concatenated across runs in the same order as input.
     """
     if voxel == "none":
-        return np.concatenate(bold_clean_per_run)
-    noisy_per_run = [
-        apply_bold_noise(bold_run, PmNoise(voxel=voxel, seed=seed, jitter=jitter), tr_s)
-        for bold_run, seed in zip(bold_clean_per_run, run_seeds)
-    ]
+        clean = np.concatenate(bold_clean_per_run)
+        return clean if signal_scale is None else signal_scale * clean
+    if signal_scale is None:
+        noisy_per_run = [
+            apply_bold_noise(bold_run, PmNoise(voxel=voxel, seed=seed, jitter=jitter), tr_s)
+            for bold_run, seed in zip(bold_clean_per_run, run_seeds)
+        ]
+    else:
+        noisy_per_run = [
+            apply_additive_noise(bold_run, PmNoise(voxel=voxel, seed=seed, jitter=jitter), tr_s,
+                                 signal_scale)
+            for bold_run, seed in zip(bold_clean_per_run, run_seeds)
+        ]
     return np.concatenate(noisy_per_run)
 
 

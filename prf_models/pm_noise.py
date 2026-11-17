@@ -555,6 +555,40 @@ def apply_bold_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float) -> np.
     return bold + noise_model.values_array * signal_scale
 
 
+def apply_additive_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float,
+                         signal_scale: float) -> np.ndarray:
+    """Add the noise as is to a signal scaled by one global constant (MATLAB prfModel.compute).
+
+    ``signal_scale * bold + noise``: the noise (fractions of the mean, from ``noise_model.compute()``) does NOT
+    depend on the size of ``bold``, so a weakly responding voxel has a low SNR. See
+    ``auditory_prf/prf_pipeline/solver/additive_noise.py`` for the constant and its provenance.
+
+    Parameters
+    ----------
+    bold : np.ndarray, shape (n_tr,)
+        Clean BOLD prediction in the forward model's units.
+    noise_model : PmNoise
+        Configured noise model; the caller controls reproducibility via ``noise_model.seed``.
+    tr_s : float
+        Repetition time in seconds.
+    signal_scale : float
+        Fraction of the mean per model unit (``additive_noise.SIGNAL_SCALE``); 1.0 when ``bold`` is
+        already in fractional units.
+
+    Returns
+    -------
+    np.ndarray, shape (n_tr,)
+    """
+    n_tr = len(bold)
+    noise_model.pm = PmAdapter(
+        TR=tr_s,
+        time_points_n=n_tr,
+        time_points_series=np.arange(n_tr, dtype=float) * tr_s,
+    )
+    noise_model.compute()
+    return signal_scale * bold + noise_model.values_array
+
+
 if __name__ == '__main__':
     TR = 1.6
     n_tr = 300

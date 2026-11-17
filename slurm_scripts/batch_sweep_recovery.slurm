@@ -22,6 +22,9 @@
 #   one shared grid and the same ground truths, plus the noise-comparison plots)
 #   GT_MODE=on_grid|off_grid   N_VOXELS=100   N_REPEATS=<n>  (default 10,000 per noisy level)
 #   GRID_FILE=<path to a saved candidate_grid_design<seed>.npz>   (skip the grid build)
+# NOISE_MODEL=additive|legacy (default additive): MATLAB-style noise added as is to the signal scaled by ONE
+# global best-case constant (see auditory-prf-docs-all/additive_noise_design.md). 'legacy' = the earlier
+# per-voxel scaling. All results made before the additive noise used 'legacy' and have to be re-run.
 # e.g.  NOISE=low N_REPEATS=10000 sbatch --time=12:00:00 slurm_scripts/batch_sweep_recovery.slurm
 # Design seeds 1000...1009 as an array:  sbatch --array=0-9 slurm_scripts/batch_sweep_recovery.slurm
 #
@@ -33,6 +36,7 @@
 #   models_output/sweep_design_erb_3band/combined/   (24 sweeps + silence_20s)
 
 NOISE=${NOISE:-none}
+NOISE_MODEL=${NOISE_MODEL:-additive}
 GT_MODE=${GT_MODE:-on_grid}
 N_VOXELS=${N_VOXELS:-100}
 DESIGN_SEED=$(( 1000 + ${SLURM_ARRAY_TASK_ID:-0} ))
@@ -48,7 +52,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "noise=$NOISE gt_mode=$GT_MODE n_voxels=$N_VOXELS design_seed=$DESIGN_SEED $REPEATS_ARG"
+echo "noise=$NOISE noise_model=$NOISE_MODEL gt_mode=$GT_MODE n_voxels=$N_VOXELS design_seed=$DESIGN_SEED $REPEATS_ARG"
 echo "==================================="
 
 module load Miniforge3
@@ -61,7 +65,7 @@ export MKL_NUM_THREADS=1
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_recovery \
     --results-dir models_output/sweep_design_erb_3band/combined \
     --output-dir sweep_recovery_results \
-    --noise $NOISE --gt-mode $GT_MODE --n-voxels $N_VOXELS \
+    --noise $NOISE --noise-model $NOISE_MODEL --gt-mode $GT_MODE --n-voxels $N_VOXELS \
     --design-seed $DESIGN_SEED $REPEATS_ARG
 PYTHON_STATUS=$?
 
