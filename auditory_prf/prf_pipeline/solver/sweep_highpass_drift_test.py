@@ -2,11 +2,13 @@
 ===========================
 Drift-removal test (paired): does the fixed drift of the noise model cause the run-specific favourite tau?
 
-For the same voxels and the same noise draws, every run is matched twice with the single-run Pearson
-recovery: as before ("none"), and after removing the slow DCT components (period longer than a cutoff) from
-BOTH the measurement and every template of that run ("hp<cutoff>"). Identical seeds, so any difference is
-due to the filter. Only per-run estimates are made (the random-effects average can be formed afterwards with
-``sweep_recovery_multirun.average_run_estimates``).
+Starting from the AVERAGED ground truth of ``sweep_groundtruth_distribution.py`` (the mean of 1,000 noisy
+copies of each voxel's signal; ``groundtruth_mean_<noise>.npz``), exactly as ``sweep_recovery_from_groundtruth.py``
+does: a fresh noise draw is added to it and every run is matched with the single-run Pearson recovery. Here each
+run is matched twice on the SAME noisy measurement: as before ("none"), and after removing the slow DCT
+components (period longer than a cutoff) from BOTH the measurement and every template of that run
+("hp<cutoff>"). Identical seeds, so any difference is due to the filter. Only per-run estimates are made (the
+random-effects average can be formed afterwards with ``sweep_recovery_multirun.average_run_estimates``).
 
 The noise drift is the sum of the first ``floor(2 * T / 120 s)`` non-constant cosine columns, so a 128 s
 cutoff (the SPM default) removes nearly all of it and 64 s removes all of it, also with jittered periods.
@@ -23,22 +25,19 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from auditory_prf.prf_pipeline.hrf import SUBCORTICAL_PARAMS, build_hrf_kernel
-from auditory_prf.prf_pipeline.run_assembly_sweeps import SIGNAL_DT_S, load_raw_psths
-from auditory_prf.prf_pipeline.solver import additive_noise as an
 from auditory_prf.prf_pipeline.solver.grid_recovery import MC_SEED
 from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
-from auditory_prf.prf_pipeline.solver.sweep_groundtruth_distribution import (
-    NOISE_JITTER_GROUNDTRUTH,
-    compute_clean_bold_per_run,
-)
+from auditory_prf.prf_pipeline.solver.sweep_groundtruth_distribution import NOISE_JITTER_GROUNDTRUTH
 from auditory_prf.prf_pipeline.solver.sweep_recovery import PARAM_NAMES, sample_ground_truths
+from auditory_prf.prf_pipeline.solver.sweep_recovery_from_groundtruth import (
+    draw_recovery_measurement,
+    load_groundtruth,
+    recovery_signal_scale,
+)
 from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
     DEFAULT_GRID_DIR,
-    DEFAULT_RESULTS_DIR,
+    DEFAULT_OUTPUT_DIR,
     RUN_DESIGN_SEEDS,
-    build_run_designs,
-    draw_multirun_measurement,
     load_run_grids,
     normalize_run_templates,
 )
@@ -46,7 +45,6 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_CUTOFFS_S = [128.0, 64.0]
-DEFAULT_OUTPUT_DIR = "sweep_recovery_results"
 
 
 # ── High-pass filter ──────────────────────────────────────────────────────────
@@ -99,16 +97,14 @@ def highpass_templates(template_per_run: list, projection: np.ndarray) -> list:
 
 # ── Paired recovery ───────────────────────────────────────────────────────────
 def _voxel_task(v_i: int, true_row: np.ndarray, state: dict) -> dict:
-    """Worker: noisy measurements of one voxel (all repeats), matched run by run with each method."""
-    clean_bold_per_run = compute_clean_bold_per_run(
-        true_row, state["raw_psth_by_seq"], state["run_designs"], state["total_run_dur_s"],
-        state["tr_s"], state["silence_seq_id"], state["hrf_kernel"])
-    n_runs, n_tr = clean_bold_per_run.shape
+    """Worker: new-noise measurements of one voxel's averaged ground truth, matched run by run with each method."""
+    groundtruth_per_run = state["groundtruth_bold"][v_i]                    # (n_runs, n_tr), the stored average
+    n_runs, n_tr = groundtruth_per_run.shape
     n_repeats = state["n_repeats"]
     measurements = np.empty((n_repeats, n_runs * n_tr), dtype=np.float32)
     for rep in range(n_repeats):
-        measurements[rep] = draw_multirun_measurement(
-            list(clean_bold_per_run), state["noise"], state["tr_s"], v_i, rep, state["jitter"],
+        measurements[rep] = draw_recovery_measurement(
+            groundtruth_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"],
             signal_scale=state["signal_scale"])
     out = {}
     for name, (projection, templates_per_run) in state["methods"].items():
@@ -122,45 +118,44 @@ def _voxel_task(v_i: int, true_row: np.ndarray, state: dict) -> dict:
 
 
 def run_highpass_test(
-    raw_psth_by_seq: dict,
-    run_designs: list,
-    total_run_dur_s: float,
-    tr_s: float,
-    silence_seq_id: str,
-    hrf_kernel: np.ndarray,
+    groundtruth_bold: np.ndarray,
     candidate_params: np.ndarray,
     template_per_run: list,
     true_params: np.ndarray,
     noise: str,
     n_repeats: int,
     cutoffs_s: Sequence[float],
+    tr_s: float,
     n_workers: int = 1,
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
-    signal_scale: Optional[float] = an.SIGNAL_SCALE,
+    signal_scale: Optional[float] = 1.0,
 ) -> dict:
-    """Single-run recovery with and without the high-pass filter, on identical noise draws.
+    """Single-run recovery from the averaged ground truth, with and without the high-pass filter, on identical noise.
 
     Parameters
     ----------
+    groundtruth_bold : np.ndarray, shape (n_voxels, n_runs, n_tr)
+        Averaged ground truth (``load_groundtruth``), in fractions of the mean for the additive noise.
     template_per_run : list of np.ndarray, each (n_candidates, n_tr)
         Un-normalised, mean-removed clean templates of every run order (``load_run_grids``).
     cutoffs_s : sequence of float
         High-pass cutoffs (seconds); one result per cutoff.
+    signal_scale : float or None
+        ``recovery_signal_scale(noise_model)``: 1.0 = additive noise on the already scaled ground truth.
 
     Returns
     -------
     dict ``{"none": ..., "hp<cutoff>": ...}`` of np.ndarray float32, shape (n_voxels, n_repeats, n_runs, 4)
     holding the (cf_index, alpha, tau_ms, w) recovered from each run alone.
     """
-    n_tr = template_per_run[0].shape[1]
+    n_voxels, n_runs, n_tr = groundtruth_bold.shape
+    assert n_voxels == len(true_params) and n_runs == len(template_per_run) and template_per_run[0].shape[1] == n_tr
     methods = {"none": (None, normalize_run_templates(template_per_run))}
     for cutoff in cutoffs_s:
         projection = highpass_projection(n_tr, tr_s, cutoff)
         methods[f"hp{cutoff:g}"] = (projection.astype(np.float32), highpass_templates(template_per_run, projection))
-    state = dict(raw_psth_by_seq=raw_psth_by_seq, run_designs=run_designs, total_run_dur_s=total_run_dur_s,
-                 tr_s=tr_s, silence_seq_id=silence_seq_id, hrf_kernel=hrf_kernel,
-                 candidate_params=candidate_params, methods=methods, noise=noise, n_repeats=n_repeats,
-                 jitter=jitter, signal_scale=signal_scale)
+    state = dict(groundtruth_bold=groundtruth_bold, tr_s=tr_s, candidate_params=candidate_params, methods=methods,
+                 noise=noise, n_repeats=n_repeats, jitter=jitter, signal_scale=signal_scale)
     if n_workers > 1:
         voxel_results = list(map_voxels(_voxel_task, true_params, state, n_workers))
     else:
@@ -172,16 +167,15 @@ def run_highpass_test(
 def _build_parser() -> argparse.ArgumentParser:
     n_workers_default = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
+    parser.add_argument("--groundtruth-dir", required=True,
+                        help="folder written by sweep_groundtruth_distribution.py (groundtruth_mean_<noise>.npz)")
     parser.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--noise", choices=["low", "mid", "high"], default="mid")
-    parser.add_argument("--n-voxels", type=int, default=100)
     parser.add_argument("--n-repeats", type=int, default=200)
     parser.add_argument("--cutoffs", type=float, nargs="+", default=list(DEFAULT_CUTOFFS_S),
                         help="high-pass cutoffs in seconds (a result per cutoff, next to the unfiltered one)")
     parser.add_argument("--design-seeds", type=int, nargs="+", default=list(RUN_DESIGN_SEEDS))
-    parser.add_argument("--jitter", type=float, nargs=3, default=list(NOISE_JITTER_GROUNDTRUTH))
     parser.add_argument("--n-workers", type=int, default=n_workers_default)
     return parser
 
@@ -189,26 +183,28 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> None:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    import stimuli.sweep_design_erb as design   # needs the project root on sys.path
-    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
-    hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
-    run_designs, total_run_dur_s = build_run_designs(args.design_seeds)
+    groundtruth = load_groundtruth(Path(args.groundtruth_dir), args.noise)
+    assert groundtruth["design_seeds"] == list(args.design_seeds), (
+        f"ground truth built for run orders {groundtruth['design_seeds']}, not {list(args.design_seeds)}")
     candidate_params, template_per_run = load_run_grids(Path(args.grid_dir), args.design_seeds)
-    true_params = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(cf_list_hz),
-                                       candidate_params, args.n_voxels)
-    run_dir = Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_highpass_test_{args.noise}"
+    true_params = groundtruth["true_params"]
+    expected = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(groundtruth["cf_list_hz"]),
+                                    candidate_params, len(true_params))
+    assert np.array_equal(true_params, expected), "the ground-truth voxels are not the MC_SEED on-grid draw"
+    run_dir = Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_highpass_test_averaged_gt_{args.noise}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("noise=%s voxels=%d repeats=%d runs=%d cutoffs=%s jitter=%s workers=%d -> %s", args.noise,
-                args.n_voxels, args.n_repeats, len(args.design_seeds), args.cutoffs, args.jitter,
-                args.n_workers, run_dir)
+    logger.info("averaged ground truth of '%s' (%s model) voxels=%d repeats=%d runs=%d cutoffs=%s jitter=%s "
+                "workers=%d -> %s", args.noise, groundtruth["noise_model"], len(true_params), args.n_repeats,
+                len(args.design_seeds), args.cutoffs, groundtruth["jitter"], args.n_workers, run_dir)
     result = run_highpass_test(
-        raw_psth_by_seq, run_designs, total_run_dur_s, design.TR_S, design.SILENCE_SEQ_ID, hrf_kernel,
-        candidate_params, template_per_run, true_params, args.noise, args.n_repeats, args.cutoffs,
-        args.n_workers, args.jitter)
+        groundtruth["groundtruth_bold"], candidate_params, template_per_run, true_params, args.noise,
+        args.n_repeats, args.cutoffs, groundtruth["tr_s"], args.n_workers, groundtruth["jitter"],
+        signal_scale=recovery_signal_scale(groundtruth["noise_model"]))
     np.savez(run_dir / f"highpass_test_{args.noise}.npz", true_params=true_params,
              cutoffs_s=np.asarray(args.cutoffs), noise=args.noise, n_repeats=args.n_repeats,
-             jitter=np.asarray(args.jitter), signal_scale=an.SIGNAL_SCALE,
-             param_names=np.asarray(PARAM_NAMES), **{f"recovered_{k}": v for k, v in result.items()})
+             jitter=np.asarray(groundtruth["jitter"]), noise_model=groundtruth["noise_model"],
+             groundtruth="averaged", param_names=np.asarray(PARAM_NAMES),
+             **{f"recovered_{k}": v for k, v in result.items()})
     logger.info("done -> %s", run_dir.resolve())
 
 
