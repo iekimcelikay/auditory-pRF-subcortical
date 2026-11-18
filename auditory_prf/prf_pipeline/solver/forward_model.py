@@ -281,6 +281,7 @@ def draw_noisy_measurement(
     run_seeds: list,
     jitter=None,
     signal_scale=None,
+    noise_scale: float = 1.0,
 ) -> np.ndarray:
     """Add one independent ``PmNoise`` draw per run, then concatenate.
 
@@ -307,12 +308,16 @@ def draw_noisy_measurement(
         REFERENCE_BOLD_STD). A number: MATLAB-style additive noise (``apply_additive_noise``): the signal
         is multiplied by ``signal_scale`` and the noise is added as is (``'none'`` then returns the scaled
         clean signal). See ``solver/additive_noise.py``.
+    noise_scale : float, optional
+        Multiplier of the additive noise (1.0 = the preset, 0.0 = none); only for the additive noise
+        (``signal_scale`` not None).
 
     Returns
     -------
     np.ndarray, shape (n_runs * n_tr_per_run,)
         Noisy BOLD, concatenated across runs in the same order as input.
     """
+    assert noise_scale == 1.0 or signal_scale is not None, "noise_scale needs the additive noise (signal_scale)"
     if voxel == "none":
         clean = np.concatenate(bold_clean_per_run)
         return clean if signal_scale is None else signal_scale * clean
@@ -324,7 +329,7 @@ def draw_noisy_measurement(
     else:
         noisy_per_run = [
             apply_additive_noise(bold_run, PmNoise(voxel=voxel, seed=seed, jitter=jitter), tr_s,
-                                 signal_scale)
+                                 signal_scale, noise_scale)
             for bold_run, seed in zip(bold_clean_per_run, run_seeds)
         ]
     return np.concatenate(noisy_per_run)

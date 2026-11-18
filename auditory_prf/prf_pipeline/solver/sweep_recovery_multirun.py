@@ -241,6 +241,7 @@ def draw_multirun_measurement(
     repeat_index: int,
     jitter: Optional[list] = NOISE_JITTER,
     signal_scale: Optional[float] = None,
+    noise_scale: float = 1.0,
 ) -> np.ndarray:
     """One noisy experiment: independent noise per run, each run mean-removed, concatenated.
 
@@ -255,6 +256,9 @@ def draw_multirun_measurement(
     signal_scale : float or None
         None: legacy per-voxel noise scaling; a number: additive noise on a signal scaled by it
         (``additive_noise.SIGNAL_SCALE``).
+    noise_scale : float
+        Multiplier of the additive noise (1.0 = the preset); the same seeds at every scale, so the noise at
+        scale k is exactly k times the noise at scale 1.
 
     Returns
     -------
@@ -264,7 +268,8 @@ def draw_multirun_measurement(
     assert len({len(bold) for bold in clean_bold_per_run}) == 1, "runs differ in length"
     run_seeds = spawn_noise_seeds(MC_SEED, voxel_index, repeat_index, n_runs=n_runs)
     noisy_per_run = draw_noisy_measurement(clean_bold_per_run, noise, tr_s, run_seeds,
-                                           jitter=jitter, signal_scale=signal_scale).reshape(n_runs, -1)
+                                           jitter=jitter, signal_scale=signal_scale,
+                                           noise_scale=noise_scale).reshape(n_runs, -1)
     return (noisy_per_run - noisy_per_run.mean(axis=1, keepdims=True)).ravel()
 
 

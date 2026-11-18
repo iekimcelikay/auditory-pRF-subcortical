@@ -556,7 +556,7 @@ def apply_bold_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float) -> np.
 
 
 def apply_additive_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float,
-                         signal_scale: float) -> np.ndarray:
+                         signal_scale: float, noise_scale: float = 1.0) -> np.ndarray:
     """Add the noise as is to a signal scaled by one global constant (MATLAB prfModel.compute).
 
     ``signal_scale * bold + noise``: the noise (fractions of the mean, from ``noise_model.compute()``) does NOT
@@ -574,6 +574,10 @@ def apply_additive_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float,
     signal_scale : float
         Fraction of the mean per model unit (``additive_noise.SIGNAL_SCALE``); 1.0 when ``bold`` is
         already in fractional units.
+    noise_scale : float
+        Multiplier of the whole noise (white, cardiac, respiratory and drift together; every component is
+        linear in its amplitude, so this equals scaling the five preset amplitudes). 1.0 = the preset
+        unchanged, 0.0 = no noise. Used by the noise-scale sweep.
 
     Returns
     -------
@@ -586,7 +590,7 @@ def apply_additive_noise(bold: np.ndarray, noise_model: PmNoise, tr_s: float,
         time_points_series=np.arange(n_tr, dtype=float) * tr_s,
     )
     noise_model.compute()
-    return signal_scale * bold + noise_model.values_array
+    return signal_scale * bold + noise_scale * noise_model.values_array
 
 
 if __name__ == '__main__':
