@@ -4,9 +4,9 @@
 #SBATCH --job-name=sweep_noise_scale
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/sweep_noise_scale_%j.out
 #SBATCH --error=/scratch/ecelikay/workspace/auditory-pRF-subcortical/outputs_terminal/sweep_noise_scale_%j.err
 #SBATCH --mail-type=ALL
@@ -31,7 +31,7 @@
 # Full run:
 #   sbatch slurm_scripts/batch_sweep_noise_scale_recovery.slurm
 #
-# --time=01:00:00 is only a ceiling; check `seff <jobid>` and adjust.
+# --time=02:00:00 is only a ceiling; check `seff <jobid>` and adjust.
 
 PRESET=${PRESET:-low}
 NOISE_SCALES=${NOISE_SCALES:-"0 0.01 0.03 0.1 0.3 1 3"}
