@@ -66,6 +66,93 @@ def best_match_indices(
     return best_idx
 
 
+def unit_per_run(measurements_per_run: np.ndarray) -> np.ndarray:
+    """Mean-removed, unit-norm measurement of every run (each run on its own).
+
+    Parameters
+    ----------
+    measurements_per_run : np.ndarray, shape (n_repeats, n_runs, n_tr)
+        Not modified.
+
+    Returns
+    -------
+    np.ndarray float32, shape (n_repeats, n_runs, n_tr)
+        Every run has mean 0 and unit norm; an all-zero run stays zero (its r is 0, not NaN).
+    """
+    assert measurements_per_run.ndim == 3, f"expected (n_repeats, n_runs, n_tr), got {measurements_per_run.shape}"
+    centered = measurements_per_run - measurements_per_run.mean(axis=-1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=-1, keepdims=True)
+    return (centered / np.where(norms == 0, 1.0, norms)).astype(np.float32)
+
+
+def fixed_effects_scores(template_per_run_norm: list, unit_measurements: np.ndarray) -> tuple:
+    """Fixed-effects score of every candidate: Pearson r of each run on its own, averaged over runs.
+
+    The 24 per-run r tables are accumulated one run at a time, so the memory stays at two
+    ``(n_candidates, n_repeats)`` matrices instead of ``n_runs`` of them.
+
+    Parameters
+    ----------
+    template_per_run_norm : list of np.ndarray, each (n_candidates, n_tr)
+        Mean-removed, unit-norm templates of every run (``normalize_run_templates`` output).
+    unit_measurements : np.ndarray, shape (n_repeats, n_runs, n_tr)
+        ``unit_per_run`` output.
+
+    Returns
+    -------
+    mean_r2 : np.ndarray float32, shape (n_candidates, n_repeats)
+        Mean over runs of r^2 (the score the winner is picked from).
+    mean_r : np.ndarray float32, shape (n_candidates, n_repeats)
+        Mean over runs of the signed r (kept to see whether a winner is anti-correlated).
+    """
+    n_runs = len(template_per_run_norm)
+    assert unit_measurements.shape[1] == n_runs, (
+        f"{unit_measurements.shape[1]} runs of measurements vs {n_runs} template matrices")
+    assert all(t.shape[1] == unit_measurements.shape[2] for t in template_per_run_norm), "timepoints differ"
+    n_candidates = template_per_run_norm[0].shape[0]
+    mean_r2 = np.zeros((n_candidates, unit_measurements.shape[0]), dtype=np.float32)
+    mean_r = np.zeros_like(mean_r2)
+    for run, templates in enumerate(template_per_run_norm):
+        r_run = templates @ unit_measurements[:, run, :].T            # (n_candidates, n_repeats)
+        mean_r2 += r_run ** 2
+        mean_r += r_run
+    return mean_r2 / n_runs, mean_r / n_runs
+
+
+def best_match_fixed_effects(
+    template_per_run_norm: list,
+    measurements_per_run: np.ndarray,
+    repeat_chunk: int = REPEAT_CHUNK,
+) -> dict:
+    """Fixed-effects winner for each noisy repeat: the candidate with the highest mean r^2 over runs.
+
+    Parameters
+    ----------
+    template_per_run_norm : list of np.ndarray, each (n_candidates, n_tr)
+    measurements_per_run : np.ndarray, shape (n_repeats, n_runs, n_tr)
+        Noisy measurements; not modified.
+    repeat_chunk : int
+        Repeats scored per matmul (bounds the score-matrix memory).
+
+    Returns
+    -------
+    dict with
+        best_idx : (n_repeats,) int64, lowest index on a tie
+        winner_mean_r : (n_repeats,) float32, the winner's mean SIGNED r (negative = anti-correlated)
+    """
+    n_repeats = measurements_per_run.shape[0]
+    best_idx = np.empty(n_repeats, dtype=np.int64)
+    winner_mean_r = np.empty(n_repeats, dtype=np.float32)
+    for start in range(0, n_repeats, repeat_chunk):
+        stop = min(start + repeat_chunk, n_repeats)
+        mean_r2, mean_r = fixed_effects_scores(
+            template_per_run_norm, unit_per_run(measurements_per_run[start:stop]))
+        winners = np.argmax(mean_r2, axis=0)
+        best_idx[start:stop] = winners
+        winner_mean_r[start:stop] = mean_r[winners, np.arange(stop - start)]
+    return {"best_idx": best_idx, "winner_mean_r": winner_mean_r}
+
+
 def _init_worker(state: dict) -> None:
     _state.update(state)
 

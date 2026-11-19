@@ -17,7 +17,8 @@
 # perfect noise-free recovery), 24 run orders; noise = k x the 'low' preset (white, cardiac, respiratory and
 # drift together, jitter 0.1, added as is to the signal scaled by the global best-case constant). k = 0 is
 # noise-free, k = 1 is the low noise. The noise of every level is k times the same pattern (same seeds).
-# Per level: run 1 alone, 24-run joint fit and random effects from identical noise, tau heatmaps and tau summary.
+# Per level: run 1 alone and the 24-run fixed-effects estimate (mean r^2 over runs) from identical noise, tau
+# heatmaps and tau summary.
 # Every noise draw is matched without a filter and once per high-pass cutoff (HIGHPASS_CUTOFFS, seconds; the
 # DCT filter of the high-pass test, applied to the measurement and to the templates of every run), on the SAME
 # noise, so the differences are due to the filter. Files of the unfiltered recovery keep their names, the others

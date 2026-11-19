@@ -15,8 +15,9 @@
 # Script 2 of the averaged-noisy ground truth (solver/sweep_recovery_from_groundtruth.py): recovery of
 # (cf_index, alpha, tau_ms, w) from the AVERAGED ground-truth signal of
 # sweep_groundtruth_distribution.py plus fresh noise (same PmNoise, jitter 0.1, separate seed stream),
-# from 24 runs: joint fit and random effects (log-space average) and the spread of the 24 per-run
-# estimates. Each noise level is recovered against its own averaged ground truth. Voxels are spread
+# from 24 runs: fixed effects (every run scored on its own, the r^2 tables averaged over runs, the highest
+# mean r^2 wins; the per-level best scores, top candidates and full scores of the first repeats are saved)
+# and the spread of the 24 per-run estimates. Each noise level is recovered against its own averaged ground truth. Voxels are spread
 # over all CPUs of the job.
 #
 # The noise model (additive | legacy) is read from each groundtruth_mean_<noise>.npz: the recovery noise

@@ -1,12 +1,14 @@
 """sweep_recovery_multirun.py
 ===========================
 Recovery of (cf_index, alpha, tau_ms, w) from SEVERAL runs with different stimulus orders
-(the real experiment has 24), using all runs jointly (method B1: concatenation).
+(the real experiment has 24), with a FIXED-EFFECTS estimate.
 
-For one candidate the template is the concatenation of its clean BOLD over the run orders
-(each run mean-removed, amplitude kept), normalised once over the whole concatenation; the
-measurement is the noisy runs concatenated (independent noise per run, each run mean-removed);
-the winner is the candidate with the highest Pearson r over the whole concatenation.
+Every run is scored on its own: the Pearson r of the run's noisy measurement (independent noise per run, mean
+removed) against all candidates' templates for that run order. The r^2 tables of the runs are averaged and the
+candidate with the highest mean r^2 wins. Nothing is thrown away: the best score of every level of every parameter
+(e.g. every tau), the top candidates and the per-run profiles are saved, and the full score vector over all
+candidates for the first few repeats of every voxel. The argmax-r estimate of each run alone is kept for the 1-run
+baseline and the spread.
 
 One noise-free candidate grid per run order (``build-grid``, one SLURM array task each),
 then ``recover`` loads them all. Design: auditory-prf-docs-all/sweep_24run_recovery_design.md.
@@ -46,13 +48,21 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     plot_accuracy_comparison,
     save_accuracy_table,
 )
-from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
+from auditory_prf.prf_pipeline.solver.match_details import (
+    TOP_N_MATCHES,
+    level_indices_from_params,
+    match_details,
+    match_details_fixed_effects,
+)
+from auditory_prf.prf_pipeline.solver.parallel_recovery import map_voxels
 from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     N_VOXELS,
+    N_TOP_CANDIDATES,
     NOISE_JITTER,
     PARAM_NAMES,
     RECTIFY,
     RHO,
+    TIE_TOL,
     build_candidate_grid,
     clean_margins,
     plot_relative_mse,
@@ -73,7 +83,7 @@ N_REPEATS = 1000                                 # Monte Carlo repeats per noise
 DEFAULT_RESULTS_DIR = "models_output/sweep_design_erb_3band/combined"
 DEFAULT_GRID_DIR = "sweep_recovery_multirun_grids"
 DEFAULT_OUTPUT_DIR = "sweep_recovery_results"
-ESTIMATES = ("joint", "random_effects")          # the two 24-run estimates
+ESTIMATES = ("fixed_effects",)                   # the 24-run estimate (mean r^2 over runs, argmax)
 
 
 # ── Run designs and per-run grids ─────────────────────────────────────────────
@@ -129,28 +139,7 @@ def load_run_grids(grid_dir: Path, design_seeds: Sequence[int]) -> tuple:
     return candidate_params, template_per_run
 
 
-def concatenate_templates(template_per_run: list) -> np.ndarray:
-    """Concatenate the runs' templates and normalise once over the whole concatenation.
-
-    Parameters
-    ----------
-    template_per_run : list of np.ndarray, each (n_candidates, n_tr)
-        Clean BOLD per run; mean is removed per run here (amplitude is kept).
-
-    Returns
-    -------
-    np.ndarray float32, shape (n_candidates, n_runs * n_tr)
-        Rows have mean 0 and unit norm over the concatenation (an all-zero row stays zero).
-    """
-    assert all(t.shape == template_per_run[0].shape for t in template_per_run), (
-        "runs differ in shape: " + str([t.shape for t in template_per_run]))
-    template_matrix = np.concatenate(
-        [t - t.mean(axis=1, keepdims=True) for t in template_per_run], axis=1).astype(np.float32)
-    norms = np.linalg.norm(template_matrix, axis=1, keepdims=True)
-    return template_matrix / np.where(norms == 0, 1.0, norms)
-
-
-# ── Per-run templates, random-effects average, spread ─────────────────────────
+# ── Per-run templates, clean margins, spread ──────────────────────────────────
 def normalize_run_templates(template_per_run: list) -> list:
     """Unit-norm templates of every run on its own (the single-run recovery's templates).
 
@@ -171,6 +160,47 @@ def normalize_run_templates(template_per_run: list) -> list:
     return normalized
 
 
+def clean_margins_fixed_effects(clean_per_run: np.ndarray, template_per_run_norm: list,
+                                candidate_params: np.ndarray, tie_tol: float = TIE_TOL) -> dict:
+    """Identifiability of one voxel from its CLEAN BOLD on the fixed-effects score (mean r^2 over runs).
+
+    Every run is scored on its own (clean signal and templates mean-removed and unit-norm within the run), then
+    the r^2 values are averaged over runs; computed in float64.
+
+    Parameters
+    ----------
+    clean_per_run : np.ndarray, shape (n_runs, n_tr)
+        Clean BOLD of the voxel in every run.
+    template_per_run_norm : list of np.ndarray, each (n_candidates, n_tr)
+        ``normalize_run_templates`` output.
+    candidate_params : np.ndarray, shape (n_candidates, n_params)
+
+    Returns
+    -------
+    dict with best_idx, r_best (the winner's mean r^2), margins (n_params,; the winner's mean r^2 minus the best
+    mean r^2 among the candidates that differ in that parameter), n_ties (candidates within ``tie_tol`` of the
+    best), top_idx / top_r (N_TOP_CANDIDATES; mean r^2).
+    """
+    assert len(clean_per_run) == len(template_per_run_norm), "one clean signal per run"
+    mean_r2 = np.zeros(template_per_run_norm[0].shape[0])
+    for clean_bold, templates in zip(clean_per_run, template_per_run_norm):
+        centered = np.asarray(clean_bold, dtype=np.float64) - np.mean(clean_bold)
+        norm = np.linalg.norm(centered)
+        unit = centered / (norm if norm > 0 else 1.0)
+        mean_r2 += (templates.astype(np.float64) @ unit) ** 2
+    mean_r2 /= len(clean_per_run)
+    best_idx = int(np.argmax(mean_r2))
+    margins = np.full(candidate_params.shape[1], np.nan)
+    for p in range(candidate_params.shape[1]):
+        differs = ~np.isclose(candidate_params[:, p], candidate_params[best_idx, p])
+        if differs.any():
+            margins[p] = mean_r2[best_idx] - mean_r2[differs].max()
+    top_idx = np.argsort(-mean_r2, kind="stable")[:N_TOP_CANDIDATES]
+    return {"best_idx": best_idx, "r_best": float(mean_r2[best_idx]), "margins": margins,
+            "n_ties": int((mean_r2 >= mean_r2[best_idx] - tie_tol).sum()),
+            "top_idx": top_idx, "top_r": mean_r2[top_idx]}
+
+
 def _to_average_space(estimates: np.ndarray, cf_list_hz: np.ndarray) -> np.ndarray:
     """(..., 4) estimates -> natural log of CF in Hz, alpha and tau_ms; w unchanged."""
     assert estimates.shape[-1] == 4, estimates.shape
@@ -178,28 +208,6 @@ def _to_average_space(estimates: np.ndarray, cf_list_hz: np.ndarray) -> np.ndarr
     assert cf_index.min() >= 0 and cf_index.max() < len(cf_list_hz), "cf_index outside the CF list"
     return np.stack([np.log(cf_list_hz[cf_index]), np.log(estimates[..., 1]),
                      np.log(estimates[..., 2]), estimates[..., 3]], axis=-1)
-
-
-def average_run_estimates(recovered_per_run: np.ndarray, cf_list_hz: np.ndarray) -> np.ndarray:
-    """Random effects: average the per-run estimates (log space for CF in Hz, alpha, tau; w linear).
-
-    Parameters
-    ----------
-    recovered_per_run : np.ndarray, shape (..., n_runs, 4)
-        (cf_index, alpha, tau_ms, w) recovered from each run alone.
-    cf_list_hz : np.ndarray, shape (n_cf,), increasing
-
-    Returns
-    -------
-    np.ndarray, shape (..., 4)
-        The average; cf_index is generally fractional (the log-mean CF mapped back onto the
-        index by interpolation), alpha and tau_ms are geometric means, w the arithmetic mean.
-    """
-    assert np.all(np.diff(cf_list_hz) > 0), "cf_list_hz must be increasing"
-    mean_space = _to_average_space(recovered_per_run, cf_list_hz).mean(axis=-2)
-    cf_index = np.interp(mean_space[..., 0], np.log(cf_list_hz), np.arange(len(cf_list_hz)))
-    return np.stack([cf_index, np.exp(mean_space[..., 1]), np.exp(mean_space[..., 2]),
-                     mean_space[..., 3]], axis=-1)
 
 
 def estimate_spread(recovered_per_run: np.ndarray, cf_list_hz: np.ndarray) -> np.ndarray:
@@ -232,7 +240,7 @@ def chance_spread(candidate_params: np.ndarray, cf_list_hz: np.ndarray) -> np.nd
                      np.std(np.unique(candidate_params[:, 3]))])
 
 
-# ── 24-run recovery (joint fit and random effects) ────────────────────────────
+# ── 24-run recovery (fixed effects) ───────────────────────────────────────────
 def draw_multirun_measurement(
     clean_bold_per_run: list,
     noise: str,
@@ -274,7 +282,7 @@ def draw_multirun_measurement(
 
 
 def _recover_one_voxel_multirun(v_i: int, true_row: np.ndarray, state: dict) -> dict:
-    """Worker: clean BOLD of every run, all noise repeats, joint and per-run argmax, margins."""
+    """Worker: clean BOLD of every run, all noise repeats, fixed-effects and per-run matching, margins."""
     cf_index, alpha, tau_ms, w = true_row
     clean_bold_per_run = [
         run_sweep_forward_model(
@@ -291,18 +299,24 @@ def _recover_one_voxel_multirun(v_i: int, true_row: np.ndarray, state: dict) -> 
         measurements[rep, :] = draw_multirun_measurement(
             clean_bold_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"],
             signal_scale=state.get("signal_scale"))
+    measurements = measurements.reshape(n_repeats, n_runs, n_tr)
 
-    # per run on its own first: best_match_indices normalises its input in place, so pass copies
-    per_run_idx = np.empty((n_repeats, n_runs), dtype=np.int64)
-    for r in range(n_runs):
-        per_run_idx[:, r] = best_match_indices(
-            template_per_run_norm[r], measurements[:, r * n_tr:(r + 1) * n_tr].copy())
-    best_idx = best_match_indices(state["template_matrix_norm"], measurements)     # joint
+    level_indices, top_n = state["level_indices"], TOP_N_MATCHES
+    fixed = match_details_fixed_effects(template_per_run_norm, measurements, level_indices, top_n,
+                                        full_score_repeats=state["full_score_repeats"])
+    per_run = [match_details(template_per_run_norm[r], measurements[:, r, :], level_indices, top_n)
+               for r in range(n_runs)]                    # each run on its own: the single-run estimate (argmax r)
 
-    clean_concatenated = np.concatenate([bold - bold.mean() for bold in clean_bold_per_run])
-    result = clean_margins(clean_concatenated, state["template_matrix_norm"], candidate_params)
-    result["recovered"] = candidate_params[best_idx]                               # (n_repeats, 4)
-    result["recovered_per_run"] = candidate_params[per_run_idx]                    # (n_repeats, n_runs, 4)
+    result = clean_margins_fixed_effects(np.stack(clean_bold_per_run), template_per_run_norm, candidate_params)
+    result["recovered"] = candidate_params[fixed["best_idx"]]                       # (n_repeats, 4)
+    result["winner_mean_r"] = fixed["winner_mean_r"]                                # (n_repeats,)
+    result["recovered_per_run"] = candidate_params[
+        np.stack([d["best_idx"] for d in per_run], axis=1)]                         # (n_repeats, n_runs, 4)
+    for name in ("top_idx", "top_r", "level_best_r"):     # every match: fixed effects and run by run
+        result[f"match_{name}_fixed_effects"] = fixed[name]
+        result[f"match_{name}_per_run"] = np.stack([d[name] for d in per_run], axis=1)
+    if state["full_score_repeats"] > 0:
+        result["full_scores_fixed_effects"] = fixed["full_scores"]                  # (n_full, n_candidates)
     return result
 
 
@@ -314,49 +328,57 @@ def run_recovery_multirun(
     silence_seq_id: str,
     hrf_kernel: np.ndarray,
     candidate_params: np.ndarray,
-    template_matrix_norm: np.ndarray,
     template_per_run_norm: list,
     true_params: np.ndarray,
     noise: str,
     n_repeats: int,
-    cf_list_hz: np.ndarray,
     n_workers: int = 1,
     jitter: Optional[list] = NOISE_JITTER,
     signal_scale: Optional[float] = None,
+    full_score_repeats: int = 0,
 ) -> dict:
-    """Monte Carlo recovery from all runs, one noise level: joint fit and random effects.
+    """Monte Carlo recovery from all runs, one noise level: the fixed-effects estimate.
+
+    Every run is scored on its own (Pearson r against all candidates), the r^2 values are averaged over the
+    runs and the candidate with the highest mean r^2 wins.
 
     Parameters
     ----------
-    template_matrix_norm : np.ndarray, shape (n_candidates, n_runs * n_tr)
-        ``concatenate_templates`` output (joint fit).
     template_per_run_norm : list of np.ndarray, each (n_candidates, n_tr)
-        ``normalize_run_templates`` output (one fit per run).
+        ``normalize_run_templates`` output (one matrix per run).
+    full_score_repeats : int
+        The mean-r^2 vector over all candidates is kept for the first this many repeats of every voxel (0 = none).
 
     Returns
     -------
-    dict with the keys of ``sweep_recovery.run_recovery`` for the JOINT fit
-    (recovered_params (n_voxels, n_repeats, 4), best_idx, r_best, n_ties, margins, top_idx, top_r),
-    plus recovered_per_run (n_voxels, n_repeats, n_runs, 4), recovered_random_effects
-    (n_voxels, n_repeats, 4; the log-space average, see ``average_run_estimates``) and
-    recovered_first_run (n_voxels, n_repeats, 4; run 1 alone = the single-run estimate).
+    dict with the keys of ``sweep_recovery.run_recovery`` for the FIXED-EFFECTS estimate
+    (recovered_params (n_voxels, n_repeats, 4), best_idx, r_best, n_ties, margins, top_idx, top_r; the last
+    five describe the clean ground truth on the mean-r^2 score), plus
+        winner_mean_r (n_voxels, n_repeats): the winner's mean signed r (negative = anti-correlated),
+        recovered_per_run (n_voxels, n_repeats, n_runs, 4): the argmax-r estimate of every run alone,
+        recovered_first_run (n_voxels, n_repeats, 4): run 1 alone = the single-run estimate,
+        match_{top_idx,top_r,level_best_r}_fixed_effects (n_voxels, n_repeats, ...) and
+        match_{top_idx,top_r,level_best_r}_per_run (n_voxels, n_repeats, n_runs, ...): the best candidates and the
+        best score of every level of every parameter,
+        full_scores_fixed_effects (n_voxels, min(full_score_repeats, n_repeats), n_candidates), only if
+        ``full_score_repeats > 0``.
     """
     assert len(run_designs) == len(template_per_run_norm), "one template matrix per run order"
-    assert template_matrix_norm.shape[1] == len(run_designs) * template_per_run_norm[0].shape[1]
     state = dict(raw_psth_by_seq=raw_psth_by_seq, run_designs=run_designs,
                  total_run_dur_s=total_run_dur_s, tr_s=tr_s, silence_seq_id=silence_seq_id,
                  hrf_kernel=hrf_kernel, candidate_params=candidate_params,
-                 template_matrix_norm=template_matrix_norm,
                  template_per_run_norm=template_per_run_norm, noise=noise, n_repeats=n_repeats,
-                 jitter=jitter, signal_scale=signal_scale)
+                 jitter=jitter, signal_scale=signal_scale, full_score_repeats=full_score_repeats,
+                 level_indices=level_indices_from_params(candidate_params))
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel_multirun, true_params, state, n_workers))
     else:
         voxel_results = [_recover_one_voxel_multirun(v_i, row, state)
                          for v_i, row in enumerate(true_params)]
     recovered_per_run = np.stack([r["recovered_per_run"] for r in voxel_results])
-    return {
+    result = {
         "recovered_params": np.stack([r["recovered"] for r in voxel_results]),
+        "winner_mean_r": np.stack([r["winner_mean_r"] for r in voxel_results]),
         "best_idx": np.array([r["best_idx"] for r in voxel_results]),
         "r_best": np.array([r["r_best"] for r in voxel_results]),
         "n_ties": np.array([r["n_ties"] for r in voxel_results]),
@@ -364,15 +386,17 @@ def run_recovery_multirun(
         "top_idx": np.stack([r["top_idx"] for r in voxel_results]),
         "top_r": np.stack([r["top_r"] for r in voxel_results]),
         "recovered_per_run": recovered_per_run,
-        "recovered_random_effects": average_run_estimates(recovered_per_run, cf_list_hz),
         "recovered_first_run": recovered_per_run[:, :, 0, :],
     }
+    for key in voxel_results[0]:
+        if key.startswith("match_") or key == "full_scores_fixed_effects":
+            result[key] = np.stack([r[key] for r in voxel_results])
+    return result
 
 
 # ── Baseline, comparison and spread outputs ───────────────────────────────────
-METHOD_LABELS = {"1run": "1 run", "24run_joint": "24 runs, joint fit",
-                 "24run_random_effects": "24 runs, random effects"}
-METHOD_COLORS = {"1run": "gray", "24run_joint": "steelblue", "24run_random_effects": "mediumpurple"}
+METHOD_LABELS = {"1run": "1 run", "24run_fixed_effects": "24 runs, fixed effects"}
+METHOD_COLORS = {"1run": "gray", "24run_fixed_effects": "steelblue"}
 NOISE_COLORS = {"none": "dimgray", "low": "forestgreen", "mid": "darkorange", "high": "firebrick"}
 SPREAD_AXIS_LABELS = {"cf_index": "cf_index (ln Hz)", "alpha": "alpha (ln)", "tau_ms": "tau_ms (ln)",
                       "w": "w"}
@@ -415,7 +439,7 @@ def load_baseline_results(baseline_dir: Path, noise: str, n_repeats: int,
 def save_run_comparison_table(summary_by_method: dict, save_path: Path) -> None:
     """Long CSV: one row per noise level x parameter x method.
 
-    summary_by_method : {"1run": {noise: summary}, "24run_joint": ..., "24run_random_effects": ...}
+    summary_by_method : {"1run": {noise: summary}, "24run_fixed_effects": {noise: summary}}
     with summary from ``sweep_recovery.summarize``.
     """
     methods = list(summary_by_method)
@@ -435,7 +459,7 @@ def save_run_comparison_table(summary_by_method: dict, save_path: Path) -> None:
 def plot_run_comparison(summary_by_method: dict, save_path: Path, n_voxels: Optional[int] = None,
                         n_repeats: Optional[int] = None) -> None:
     """Relative MSE of the methods side by side: one panel per parameter, one group per noise level,
-    one bar per method (1 run, joint fit, random effects); black tick = chance level; log y axis.
+    one bar per method (1 run, 24 runs with fixed effects); black tick = chance level; log y axis.
     """
     methods = list(summary_by_method)
     noise_levels = list(summary_by_method[methods[0]])
@@ -608,8 +632,12 @@ def recover_and_report(
     design_seeds: Sequence[int],
     n_workers: int = 1,
     signal_scale: Optional[float] = None,
+    full_score_repeats: int = 5,
 ) -> Path:
     """Run the 24-run recovery at every noise level and write all tables, plots and result files.
+
+    ``full_score_repeats``: the full mean-r^2 vector over all candidates is saved for the first this many repeats
+    of every voxel (0 = none).
 
     ``signal_scale``: None = legacy per-voxel noise scaling; ``additive_noise.SIGNAL_SCALE`` = MATLAB-style
     additive noise. The single-run baseline has to be made with the same noise model.
@@ -635,7 +663,6 @@ def recover_and_report(
     logger.info("noise=%s (%s model) voxels=%d repeats=%d runs=%d workers=%d -> %s", noise_levels,
                 noise_model, n_voxels, n_repeats, len(design_seeds), n_workers, run_dir)
 
-    template_matrix_norm = concatenate_templates(template_per_run)
     template_per_run_norm = normalize_run_templates(template_per_run)
     true_params = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(cf_list_hz),
                                        candidate_params, n_voxels)
@@ -647,8 +674,8 @@ def recover_and_report(
     baselines = {noise: load_baseline_results(baseline_dir, noise, n_repeats, true_params)
                  for noise in needs_baseline}
 
-    summary_by_method = {"1run": {}, "24run_joint": {}, "24run_random_effects": {}}
-    recovered_by_method = {"1run": {}, "joint": {}, "random_effects": {}}   # for the tau heatmaps
+    summary_by_method = {"1run": {}, "24run_fixed_effects": {}}
+    recovered_by_method = {"1run": {}, "fixed_effects": {}}   # for the tau heatmaps
     estimate_summary = {estimate: {} for estimate in ESTIMATES}
     accuracy = {estimate: {} for estimate in ESTIMATES}
     spread_by_noise = {}
@@ -657,8 +684,10 @@ def recover_and_report(
                     len(design_seeds))
         result = run_recovery_multirun(
             raw_psth_by_seq, run_designs, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
-            candidate_params, template_matrix_norm, template_per_run_norm, true_params, noise,
-            n_repeats, cf_list_hz, n_workers, signal_scale=signal_scale)
+            candidate_params, template_per_run_norm, true_params, noise,
+            n_repeats, n_workers, signal_scale=signal_scale, full_score_repeats=full_score_repeats)
+        logger.info("[%s] fixed-effects winner has a negative mean r in %.4f of the repeats", noise,
+                    float(np.mean(result["winner_mean_r"] < 0)))
         if noise == "none":     # no single-run result file: run 1 alone of this call is the 1-run column
             baseline_result = {"recovered_params": result["recovered_first_run"],
                                "margins": result["margins"], "n_ties": result["n_ties"]}
@@ -679,13 +708,12 @@ def recover_and_report(
                 baseline_params = result["recovered_first_run"]
             baseline_result = {"recovered_params": baseline_params, "margins": baseline["margins"],
                                "n_ties": baseline["n_ties"]}
-        recovered = {"joint": result["recovered_params"],
-                     "random_effects": result["recovered_random_effects"]}
+        recovered = {"fixed_effects": result["recovered_params"]}
         recovered_by_method["1run"][noise] = baseline_result["recovered_params"]
         for estimate in ESTIMATES:
             recovered_by_method[estimate][noise] = recovered[estimate]
         summaries = {"1run": summarize(true_params, baseline_result, candidate_params, cf_list_hz)}
-        for estimate in ESTIMATES:     # the random-effects result reuses the joint margins and ties
+        for estimate in ESTIMATES:     # margins and ties describe the clean ground truth on the mean-r^2 score
             summaries[f"24run_{estimate}"] = summarize(
                 true_params, {**result, "recovered_params": recovered[estimate]}, candidate_params,
                 cf_list_hz)
@@ -701,8 +729,7 @@ def recover_and_report(
             accuracy[estimate][noise] = compute_accuracy_correlations(
                 true_params, recovered[estimate], param_names=PARAM_NAMES)
             # file names follow replot_from_results.py: <prefix>_results_design<N>_<level>_<timestamp>.npz
-            saved = {k: v for k, v in result.items() if k != "recovered_params"} if estimate == "joint" \
-                else {"margins": result["margins"], "n_ties": result["n_ties"]}
+            saved = {k: v for k, v in result.items() if k != "recovered_params"}
             np.savez(run_dir / f"{RUN_PREFIX}_{estimate}_results_design{first_seed}_{noise}_{timestamp}.npz",
                      true_params=true_params, recovered_params=recovered[estimate],
                      param_names=PARAM_NAMES, noise_model=noise_model, **saved)
@@ -756,7 +783,7 @@ def _build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--output-dir", default=DEFAULT_GRID_DIR)
     grid.add_argument("--n-workers", type=int, default=n_workers_default)
 
-    recover = commands.add_parser("recover", help="24-run recovery (joint fit and random effects)")
+    recover = commands.add_parser("recover", help="24-run recovery (fixed effects: mean r^2 over runs)")
     recover.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
     recover.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
     recover.add_argument("--baseline-dir", default=None,
@@ -770,6 +797,8 @@ def _build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--n-repeats", type=int, default=N_REPEATS)
     recover.add_argument("--design-seeds", type=int, nargs="+", default=list(RUN_DESIGN_SEEDS))
     recover.add_argument("--n-workers", type=int, default=n_workers_default)
+    recover.add_argument("--full-score-repeats", type=int, default=5,
+                         help="repeats per voxel whose full r^2 vector over all candidates is saved (0 = none)")
     recover.add_argument("--noise-model", choices=list(NOISE_MODELS), default="additive",
                          help="additive: MATLAB-style noise added as is to the signal scaled by one global "
                               "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
@@ -802,7 +831,7 @@ def main(argv: Optional[list] = None) -> None:
             Path(args.baseline_dir) if args.baseline_dir else None, Path(args.output_dir),
             list(dict.fromkeys(args.noise)),
             args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers,
-            signal_scale=signal_scale_for(args.noise_model))
+            signal_scale=signal_scale_for(args.noise_model), full_score_repeats=args.full_score_repeats)
 
 
 if __name__ == "__main__":

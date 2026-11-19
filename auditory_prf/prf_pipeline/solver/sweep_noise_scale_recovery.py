@@ -9,9 +9,11 @@ constant, like the earlier recoveries). k = 0 is the noise-free case (a perfect 
 noise. The noise of every level is exactly k times the SAME noise pattern (same seeds), so the levels differ
 only in size.
 
-At each level: run 1 alone, the 24-run joint fit and the 24-run random effects (log-space average), from
-identical noise, with the tau true-versus-recovered heatmaps and the tau summary (share of exact recoveries,
-correlation with the true tau, relative MSE). The clean signals are read from the 24 template grids of
+At each level: run 1 alone and the 24-run fixed-effects estimate (every run scored on its own, the r^2 tables
+averaged over runs, the highest mean r^2 wins), from identical noise, with the tau true-versus-recovered
+heatmaps and the tau summary (share of exact recoveries, correlation with the true tau, relative MSE). The best
+score of every level of every parameter, the top candidates and the per-run profiles are saved, and the full
+score vector over all candidates for the first few repeats. The clean signals are read from the 24 template grids of
 ``sweep_recovery_multirun.py build-grid`` (verified against the forward model), so no cochlear results are
 needed for the signals, only the CF list.
 
@@ -33,11 +35,16 @@ import numpy as np
 from auditory_prf.prf_pipeline.run_assembly_sweeps import load_raw_psths
 from auditory_prf.prf_pipeline.solver.additive_noise import SIGNAL_SCALE
 from auditory_prf.prf_pipeline.solver.grid_recovery import MC_SEED
-from auditory_prf.prf_pipeline.solver.parallel_recovery import REPEAT_CHUNK, map_voxels
+from auditory_prf.prf_pipeline.solver.match_details import (  # noqa: F401  (re-exported for the tests)
+    TOP_N_MATCHES,
+    level_indices_from_params,
+    match_details,
+    match_details_fixed_effects,
+)
+from auditory_prf.prf_pipeline.solver.parallel_recovery import map_voxels
 from auditory_prf.prf_pipeline.solver.sweep_highpass_drift_test import DEFAULT_CUTOFFS_S, highpass_projection
 from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     PARAM_NAMES,
-    clean_margins,
     plot_recovered_level_distribution,
     sample_ground_truths,
     save_summary_table,
@@ -51,8 +58,7 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
     METHOD_COLORS,
     METHOD_LABELS,
     RUN_DESIGN_SEEDS,
-    average_run_estimates,
-    concatenate_templates,
+    clean_margins_fixed_effects,
     draw_multirun_measurement,
     load_run_grids,
     normalize_run_templates,
@@ -64,7 +70,6 @@ logger = logging.getLogger(__name__)
 NOISE_SCALES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
 NOISE_JITTER_SWEEP = [0.1, 0.1, 0.1]            # same jitter as the averaged-ground-truth experiment
 N_REPEATS_SWEEP = 200
-TOP_N_MATCHES = 10                              # best candidates kept for every matching
 N_VOXELS = 100
 TAU_INDEX = PARAM_NAMES.index("tau_ms")
 
@@ -115,82 +120,8 @@ def clean_signals_from_grids(candidate_params: np.ndarray, template_per_run: lis
                      for row in rows])
 
 
-def level_indices_from_params(candidate_params: np.ndarray) -> list:
-    """For every parameter, the level number (0 ..) of each candidate.
-
-    Returns
-    -------
-    list of 4 np.ndarray int64, each (n_candidates,); ``np.unique`` order, so level j of a parameter is its j-th
-    smallest value.
-    """
-    return [np.unique(candidate_params[:, p], return_inverse=True)[1].astype(np.int64).ravel()
-            for p in range(candidate_params.shape[1])]
-
-
-def match_details(template_matrix_norm: np.ndarray, measurements: np.ndarray, level_indices: list,
-                  top_n: int = TOP_N_MATCHES, repeat_chunk: int = REPEAT_CHUNK) -> dict:
-    """Pearson matching like ``best_match_indices``, but keeping the best candidates and the level profiles.
-
-    The winner is identical to ``best_match_indices`` (same normalisation, same matrix product); the input is
-    not modified.
-
-    Parameters
-    ----------
-    template_matrix_norm : np.ndarray, shape (n_candidates, n_timepoints)
-        Mean-removed, unit-norm templates.
-    measurements : np.ndarray, shape (n_repeats, n_timepoints)
-    level_indices : list of np.ndarray int, each (n_candidates,)
-        ``level_indices_from_params``.
-    top_n : int
-        Number of best candidates kept per measurement (at most the number of candidates).
-
-    Returns
-    -------
-    dict with
-        best_idx : (n_repeats,) int64, the winner (the highest Pearson r, lowest index on a tie)
-        top_idx : (n_repeats, top_n) int16, the best candidates, best first
-        top_r : (n_repeats, top_n) float32, their Pearson r
-        level_best_r : (n_repeats, n_levels_total) float32, the highest r among the candidates of every level of
-            every parameter (the parameters' levels one after the other)
-    """
-    n_candidates = template_matrix_norm.shape[0]
-    assert measurements.shape[1] == template_matrix_norm.shape[1], "timepoints differ"
-    assert n_candidates < np.iinfo(np.int16).max, "candidate numbers do not fit int16"
-    top_n = min(top_n, n_candidates)
-    centered = measurements - measurements.mean(axis=1, keepdims=True)
-    norms = np.linalg.norm(centered, axis=1, keepdims=True)
-    unit = centered / np.where(norms == 0, 1.0, norms)
-    groups = []
-    for level_index in level_indices:                      # candidates sorted by level, start of every level
-        order = np.argsort(level_index, kind="stable")
-        groups.append((order, np.flatnonzero(np.r_[True, np.diff(level_index[order]) != 0])))
-    n_repeats = measurements.shape[0]
-    best_idx = np.empty(n_repeats, dtype=np.int64)
-    top_idx = np.empty((n_repeats, top_n), dtype=np.int16)
-    top_r = np.empty((n_repeats, top_n), dtype=np.float32)
-    level_best_r = np.empty((n_repeats, sum(len(starts) for _, starts in groups)), dtype=np.float32)
-    for start in range(0, n_repeats, repeat_chunk):
-        stop = min(start + repeat_chunk, n_repeats)
-        scores = template_matrix_norm @ unit[start:stop].T                    # (n_candidates, chunk)
-        best_idx[start:stop] = np.argmax(scores, axis=0)
-        if top_n < n_candidates:
-            candidates = np.argpartition(scores, n_candidates - top_n, axis=0)[n_candidates - top_n:]
-        else:
-            candidates = np.broadcast_to(np.arange(n_candidates)[:, None], scores.shape)
-        candidate_r = np.take_along_axis(scores, candidates, axis=0)
-        order = np.lexsort((candidates, -candidate_r), axis=0)               # best r first, lowest index on a tie
-        top_idx[start:stop] = np.take_along_axis(candidates, order, axis=0).T
-        top_r[start:stop] = np.take_along_axis(candidate_r, order, axis=0).T
-        offset = 0
-        for sort_order, starts in groups:
-            level_best_r[start:stop, offset:offset + len(starts)] = np.maximum.reduceat(
-                scores[sort_order], starts, axis=0).T
-            offset += len(starts)
-    return {"best_idx": best_idx, "top_idx": top_idx, "top_r": top_r, "level_best_r": level_best_r}
-
-
 def highpass_template_per_run(template_per_run: list, projection: np.ndarray) -> list:
-    """High-pass every run's templates with the same projection; the amplitudes are kept (the joint fit needs them).
+    """High-pass every run's templates with the same projection; the amplitudes are kept.
 
     Parameters
     ----------
@@ -200,15 +131,15 @@ def highpass_template_per_run(template_per_run: list, projection: np.ndarray) ->
 
     Returns
     -------
-    list of np.ndarray float32, each (n_candidates, n_tr); pass it to ``concatenate_templates`` and
-    ``normalize_run_templates`` like the unfiltered templates.
+    list of np.ndarray float32, each (n_candidates, n_tr); pass it to ``normalize_run_templates`` like the
+    unfiltered templates.
     """
     return [(templates.astype(np.float64) @ projection).astype(np.float32) for templates in template_per_run]
 
 
 # ── Recovery ──────────────────────────────────────────────────────────────────
 def _voxel_task(v_i: int, true_row: np.ndarray, state: dict) -> dict:
-    """Worker: all noise repeats of one voxel at one noise scale; joint and per-run argmax, margins.
+    """Worker: all noise repeats of one voxel at one noise scale; fixed-effects and per-run matching, margins.
 
     With ``state["projection"]`` the slow components of every run are removed from the measurement (the
     templates in ``state`` must be filtered with the same projection).
@@ -221,44 +152,51 @@ def _voxel_task(v_i: int, true_row: np.ndarray, state: dict) -> dict:
             clean_per_run, state["preset"], state["tr_s"], v_i, rep, state["jitter"],
             signal_scale=state["signal_scale"], noise_scale=state["noise_scale"])
     raw_measurements = measurements.copy() if state["save_measurements"] else None   # before any filter
+    measurements = measurements.reshape(n_repeats, n_runs, n_tr)
     projection = state["projection"]
     if projection is not None:                       # same noise draws, slow components of each run removed
-        measurements = (measurements.reshape(n_repeats, n_runs, n_tr) @ projection.astype(np.float32)
-                        ).reshape(n_repeats, n_runs * n_tr)
+        measurements = measurements @ projection.astype(np.float32)
         clean_per_run = [bold @ projection for bold in clean_per_run]
-    per_run = [match_details(state["template_per_run_norm"][r], measurements[:, r * n_tr:(r + 1) * n_tr],
-                             state["level_indices"], state["top_n"]) for r in range(n_runs)]
-    joint = match_details(state["template_matrix_norm"], measurements, state["level_indices"], state["top_n"])
-    clean_concatenated = np.concatenate([bold - bold.mean() for bold in clean_per_run])
-    result = clean_margins(clean_concatenated, state["template_matrix_norm"], state["candidate_params"])
-    result["recovered"] = state["candidate_params"][joint["best_idx"]]
+    template_per_run_norm, level_indices, top_n = (
+        state["template_per_run_norm"], state["level_indices"], state["top_n"])
+    per_run = [match_details(template_per_run_norm[r], measurements[:, r, :], level_indices, top_n)
+               for r in range(n_runs)]
+    fixed = match_details_fixed_effects(template_per_run_norm, measurements, level_indices, top_n,
+                                        full_score_repeats=state["full_score_repeats"])
+    result = clean_margins_fixed_effects(np.stack(clean_per_run), template_per_run_norm, state["candidate_params"])
+    result["recovered"] = state["candidate_params"][fixed["best_idx"]]
+    result["winner_mean_r"] = fixed["winner_mean_r"]                     # (n_repeats,)
     result["recovered_per_run"] = state["candidate_params"][np.stack([d["best_idx"] for d in per_run], axis=1)]
     for name in ("top_idx", "top_r", "level_best_r"):                    # every match, run by run: (n_repeats, n_runs, .)
         result[f"match_{name}_per_run"] = np.stack([d[name] for d in per_run], axis=1)
-        result[f"match_{name}_joint"] = joint[name]                      # (n_repeats, .)
+        result[f"match_{name}_fixed_effects"] = fixed[name]              # (n_repeats, .)
+    if state["full_score_repeats"] > 0:
+        result["full_scores_fixed_effects"] = fixed["full_scores"]       # (n_full, n_candidates)
     result["measurements"] = raw_measurements
     return result
 
 
-def _recover_at_scale(clean_signals, candidate_params, template_matrix_norm, template_per_run_norm, true_params,
-                      preset, noise_scale, n_repeats, tr_s, cf_list_hz, n_workers, jitter, signal_scale,
-                      projection, top_n, save_measurements) -> dict:
+def _recover_at_scale(clean_signals, candidate_params, template_per_run_norm, true_params, preset, noise_scale,
+                      n_repeats, tr_s, n_workers, jitter, signal_scale, projection, top_n, save_measurements,
+                      full_score_repeats) -> dict:
     state = dict(clean_signals=clean_signals, candidate_params=candidate_params,
-                 template_matrix_norm=template_matrix_norm, template_per_run_norm=template_per_run_norm,
+                 template_per_run_norm=template_per_run_norm,
                  preset=preset, noise_scale=noise_scale, n_repeats=n_repeats, tr_s=tr_s, jitter=jitter,
                  signal_scale=signal_scale, projection=projection, top_n=top_n,
-                 save_measurements=save_measurements, level_indices=level_indices_from_params(candidate_params))
+                 save_measurements=save_measurements, full_score_repeats=full_score_repeats,
+                 level_indices=level_indices_from_params(candidate_params))
     if n_workers > 1:
         voxel_results = list(map_voxels(_voxel_task, true_params, state, n_workers))
     else:
         voxel_results = [_voxel_task(v_i, row, state) for v_i, row in enumerate(true_params)]
     recovered_per_run = np.stack([r["recovered_per_run"] for r in voxel_results])
-    match_details_stacked = {key: np.stack([r[key] for r in voxel_results]) for key in voxel_results[0]
-                             if key.startswith("match_")}
+    stacked = {key: np.stack([r[key] for r in voxel_results]) for key in voxel_results[0]
+               if key.startswith("match_") or key == "full_scores_fixed_effects"}
     return {
-        **match_details_stacked,           # match_{top_idx,top_r,level_best_r}_{per_run,joint}: (n_voxels, n_repeats, ...)
+        **stacked,     # match_{top_idx,top_r,level_best_r}_{per_run,fixed_effects}, full_scores_fixed_effects
         "measurements": np.stack([r["measurements"] for r in voxel_results]) if save_measurements else None,
-        "recovered_params": np.stack([r["recovered"] for r in voxel_results]),         # joint fit
+        "recovered_params": np.stack([r["recovered"] for r in voxel_results]),         # fixed effects
+        "winner_mean_r": np.stack([r["winner_mean_r"] for r in voxel_results]),
         "best_idx": np.array([r["best_idx"] for r in voxel_results]),
         "r_best": np.array([r["r_best"] for r in voxel_results]),
         "n_ties": np.array([r["n_ties"] for r in voxel_results]),
@@ -266,7 +204,6 @@ def _recover_at_scale(clean_signals, candidate_params, template_matrix_norm, tem
         "top_idx": np.stack([r["top_idx"] for r in voxel_results]),
         "top_r": np.stack([r["top_r"] for r in voxel_results]),
         "recovered_per_run": recovered_per_run,
-        "recovered_random_effects": average_run_estimates(recovered_per_run, cf_list_hz),
         "recovered_first_run": recovered_per_run[:, :, 0, :],
     }
 
@@ -274,27 +211,25 @@ def _recover_at_scale(clean_signals, candidate_params, template_matrix_norm, tem
 def run_noise_scale_sweep(
     clean_signals: np.ndarray,
     candidate_params: np.ndarray,
-    template_matrix_norm: np.ndarray,
     template_per_run_norm: list,
     true_params: np.ndarray,
     preset: str,
     noise_scales: Sequence[float],
     n_repeats: int,
     tr_s: float,
-    cf_list_hz: np.ndarray,
     n_workers: int = 1,
     jitter: list = NOISE_JITTER_SWEEP,
     signal_scale: float = SIGNAL_SCALE,
     projection: Optional[np.ndarray] = None,
     top_n: int = TOP_N_MATCHES,
     save_measurements: bool = False,
+    full_score_repeats: int = 0,
 ) -> dict:
     """Recovery from the clean signals with noise = k x the preset, for every k, on the same voxels and seeds.
 
     Parameters
     ----------
     clean_signals : np.ndarray, shape (n_voxels, n_runs, n_tr)    (``clean_signals_from_grids``)
-    template_matrix_norm : np.ndarray, shape (n_candidates, n_runs * n_tr)   (joint fit)
     template_per_run_norm : list of np.ndarray, each (n_candidates, n_tr)    (one fit per run)
     noise_scales : sequence of float
         k = 0 is the noise-free case, 1 the preset unchanged.
@@ -307,24 +242,27 @@ def run_noise_scale_sweep(
     save_measurements : bool
         Also return the noisy measurements (before any filter) under ``"measurements"``,
         (n_voxels, n_repeats, n_runs * n_tr) float32; otherwise that entry is None.
+    full_score_repeats : int
+        The mean-r^2 vector over all candidates is kept for the first this many repeats of every voxel (0 = none).
 
     Returns
     -------
     dict {k: result} with the keys of ``sweep_recovery_multirun.run_recovery_multirun``: recovered_params
-    (n_voxels, n_repeats, 4; joint), recovered_per_run (n_voxels, n_repeats, n_runs, 4),
-    recovered_random_effects and recovered_first_run (n_voxels, n_repeats, 4), margins, n_ties, ...
+    (n_voxels, n_repeats, 4; fixed effects), winner_mean_r, recovered_per_run (n_voxels, n_repeats, n_runs, 4),
+    recovered_first_run (n_voxels, n_repeats, 4), margins, n_ties,
+    match_{top_idx,top_r,level_best_r}_{fixed_effects,per_run}, full_scores_fixed_effects, ...
     """
     n_voxels, n_runs, n_tr = clean_signals.shape
     assert n_voxels == len(true_params) and n_runs == len(template_per_run_norm), "voxels or runs differ"
-    assert template_per_run_norm[0].shape[1] == n_tr and template_matrix_norm.shape[1] == n_runs * n_tr
+    assert template_per_run_norm[0].shape[1] == n_tr, "signals and templates differ in n_tr"
     results = {}
     for noise_scale in noise_scales:
         logger.info("noise scale k=%g x '%s': %d voxels x %d repeats x %d runs ...", noise_scale, preset,
                     n_voxels, n_repeats, n_runs)
         results[float(noise_scale)] = _recover_at_scale(
-            clean_signals, candidate_params, template_matrix_norm, template_per_run_norm, true_params, preset,
-            float(noise_scale), n_repeats, tr_s, cf_list_hz, n_workers, jitter, signal_scale, projection,
-            top_n, save_measurements)
+            clean_signals, candidate_params, template_per_run_norm, true_params, preset,
+            float(noise_scale), n_repeats, tr_s, n_workers, jitter, signal_scale, projection,
+            top_n, save_measurements, full_score_repeats)
     return results
 
 
@@ -423,12 +361,12 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
     levels_ms = np.unique(candidate_params[:, TAU_INDEX])
     true_tau = true_params[:, TAU_INDEX]
     level_values = {f"level_values_{name}": np.unique(candidate_params[:, i]) for i, name in enumerate(PARAM_NAMES)}
-    rows, recovered_by_method = [], {"1run": {}, "joint": {}, "random_effects": {}}
+    rows, recovered_by_method = [], {"1run": {}, "fixed_effects": {}}
     for k, result in results.items():
-        recovered = {"1run": result["recovered_first_run"], "joint": result["recovered_params"],
-                     "random_effects": result["recovered_random_effects"]}
-        for method_key, estimate in (("1run", "1run"), ("24run_joint", "joint"),
-                                     ("24run_random_effects", "random_effects")):
+        recovered = {"1run": result["recovered_first_run"], "fixed_effects": result["recovered_params"]}
+        logger.info("%s k=%g: fixed-effects winner has a negative mean r in %.4f of the repeats", filter_name, k,
+                    float(np.mean(result["winner_mean_r"] < 0)))
+        for method_key, estimate in (("1run", "1run"), ("24run_fixed_effects", "fixed_effects")):
             tau = recovered[estimate][:, :, TAU_INDEX]
             rows.append({"noise_scale": k, "total_sd_percent": total_sd_percent[k],
                          "white_sd_percent": white_sd_percent[k], "filter": filter_name, "method": method_key,
@@ -445,11 +383,12 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
         np.savez_compressed(
             run_dir / f"noise_scale_recovery_{infix}k{k:g}_{timestamp}.npz", true_params=true_params,
             recovered_params=result["recovered_params"], recovered_per_run=result["recovered_per_run"],
-            recovered_random_effects=result["recovered_random_effects"], margins=result["margins"],
+            winner_mean_r=result["winner_mean_r"], margins=result["margins"],
             n_ties=result["n_ties"], noise_scale=k, preset=preset, jitter=np.asarray(NOISE_JITTER_SWEEP),
             param_names=PARAM_NAMES, signal_scale=SIGNAL_SCALE, white_sd_percent=white_sd_percent[k],
             total_sd_percent=total_sd_percent[k], filter=filter_name, candidate_params=candidate_params,
-            **level_values, **{key: value for key, value in result.items() if key.startswith("match_")})
+            **level_values, **{key: value for key, value in result.items()
+                               if key.startswith("match_") or key == "full_scores_fixed_effects"})
     for method, recovered_by_label in recovered_by_method.items():
         plot_recovered_level_distribution(
             true_params, recovered_by_label, candidate_params,
@@ -471,6 +410,7 @@ def sweep_and_report(
     highpass_cutoffs_s: Sequence[float] = (),
     top_n: int = TOP_N_MATCHES,
     save_measurements: bool = False,
+    full_score_repeats: int = 5,
 ) -> Path:
     """Run the sweep and write the tables, plots and result files.
 
@@ -487,6 +427,9 @@ def sweep_and_report(
     save_measurements : bool
         Also save the noisy measurements (shared by all filters) as ``measurements_k<k>_<timestamp>.npy``,
         (n_voxels, n_repeats, n_runs * n_tr) float32 per noise level.
+    full_score_repeats : int
+        The full mean-r^2 vector over all candidates is saved for the first this many repeats of every voxel
+        (0 = none).
 
     Returns
     -------
@@ -513,9 +456,10 @@ def sweep_and_report(
         projection = None if cutoff is None else highpass_projection(n_tr, tr_s, cutoff)
         filtered = template_per_run if projection is None else highpass_template_per_run(template_per_run, projection)
         results = run_noise_scale_sweep(
-            clean_signals, candidate_params, concatenate_templates(filtered), normalize_run_templates(filtered),
-            true_params, preset, noise_scales, n_repeats, tr_s, cf_list_hz, n_workers, projection=projection,
-            top_n=top_n, save_measurements=save_measurements and cutoff is None)
+            clean_signals, candidate_params, normalize_run_templates(filtered),
+            true_params, preset, noise_scales, n_repeats, tr_s, n_workers, projection=projection,
+            top_n=top_n, save_measurements=save_measurements and cutoff is None,
+            full_score_repeats=full_score_repeats)
         for k, result in results.items():                  # the measurements are the same for every filter: save once
             if result["measurements"] is not None:
                 np.save(run_dir / f"measurements_k{k:g}_{timestamp}.npy", result["measurements"])
@@ -550,6 +494,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="best candidates saved for every matching, with the best r at every parameter level")
     parser.add_argument("--save-measurements", action="store_true",
                         help="save the noisy measurements (about 0.8 GB per noise level for 100 voxels x 200 repeats)")
+    parser.add_argument("--full-score-repeats", type=int, default=5,
+                        help="repeats per voxel whose full r^2 vector over all candidates is saved (0 = none)")
     parser.add_argument("--n-workers", type=int, default=n_workers_default)
     return parser
 
@@ -561,7 +507,8 @@ def main(argv: Optional[list] = None) -> None:
     sweep_and_report(Path(args.grid_dir), Path(args.output_dir), cf_list_hz, args.preset,
                      list(dict.fromkeys(args.noise_scales)), args.n_voxels, args.n_repeats,
                      args.design_seeds, args.n_workers, highpass_cutoffs_s=args.highpass_cutoffs,
-                     top_n=args.top_n, save_measurements=args.save_measurements)
+                     top_n=args.top_n, save_measurements=args.save_measurements,
+                     full_score_repeats=args.full_score_repeats)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ copies of each voxel's signal; ``groundtruth_mean_<noise>.npz``), exactly as ``s
 does: a fresh noise draw is added to it and every run is matched with the single-run Pearson recovery. Here each
 run is matched twice on the SAME noisy measurement: as before ("none"), and after removing the slow DCT
 components (period longer than a cutoff) from BOTH the measurement and every template of that run
-("hp<cutoff>"). Identical seeds, so any difference is due to the filter. Only per-run estimates are made (the
-random-effects average can be formed afterwards with ``sweep_recovery_multirun.average_run_estimates``).
+("hp<cutoff>"). Identical seeds, so any difference is due to the filter. Only per-run estimates are made (a
+fixed-effects estimate over runs is not formed here).
 
 The noise drift is the sum of the first ``floor(2 * T / 120 s)`` non-constant cosine columns, so a 128 s
 cutoff (the SPM default) removes nearly all of it and 64 s removes all of it, also with jittered periods.
