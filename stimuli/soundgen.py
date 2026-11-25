@@ -100,6 +100,90 @@ class SoundGen:
         max_amplitude = 0.2753
         return normalized_sound / (max_amplitude + 0.01)
 
+    def harmonic_sweep_maker(self,
+                             freq_fn_hz,
+                             tone_duration: float,
+                             max_freq_hz: float = 2500.0,
+                             taper_hz: float = 500.0,
+                             slope_db_per_octave: float = -6.0,
+                             phases: str = "schroeder",
+                             equalize_rms: bool = True,
+                             dbspl: float = 60,
+                             start_phase_rad: float = 0.0,
+                             ) -> np.ndarray:
+        """Harmonic complex tone whose fundamental follows ``freq_fn_hz`` (counterpart of fm_sweep_maker).
+
+        Component n has instantaneous frequency n * f0(t) and amplitude
+        ``10 ** (slope_db_per_octave * log2(n) / 20)`` (-6 dB/octave is about 1/n). Components fade
+        out linearly over the ``taper_hz`` below ``max_freq_hz`` and are absent above it, so the
+        number of components changes as f0 moves (about 20 at f0 = 125 Hz, 3 at 800 Hz for 2500 Hz).
+
+        Parameters
+        ----------
+        freq_fn_hz : callable
+            Vectorised f0(time_s) -> instantaneous fundamental in Hz; array (n_samples,) in and out.
+        tone_duration : float
+            Duration in seconds.
+        max_freq_hz : float
+            Ceiling of the components in Hz; must be below Nyquist.
+        taper_hz : float
+            Width in Hz of the linear fade below the ceiling (0 = hard cutoff).
+        slope_db_per_octave : float
+            Amplitude slope across harmonic number n (0 = equal amplitudes).
+        phases : {"schroeder", "sine"}
+            "schroeder": theta_n = -pi * n * (n - 1) / N with N the largest harmonic number reached
+            (smooth waveform, low crest factor). "sine": all components in sine phase (pulse-like).
+        equalize_rms : bool
+            Divide by the instantaneous component power so the level does not drift with f0
+            (the RMS of a unit-amplitude sine).
+        dbspl : float
+            Overall level, calibrated like sound_maker / fm_sweep_maker.
+        start_phase_rad : float
+            Phase offset of the fundamental at t = 0.
+
+        Returns
+        -------
+        np.ndarray, shape (int(sample_rate * tone_duration),)
+        """
+        if phases not in ("schroeder", "sine"):
+            raise ValueError(f"phases must be 'schroeder' or 'sine', got {phases!r}")
+        if taper_hz < 0:
+            raise ValueError(f"taper_hz must be >= 0, got {taper_hz}")
+        assert max_freq_hz < self.sample_rate / 2, "max_freq_hz must be below Nyquist"
+
+        n_samples = int(self.sample_rate * tone_duration)
+        time_s = np.arange(n_samples) / self.sample_rate
+        f0_hz = np.asarray(freq_fn_hz(time_s), dtype=np.float64)
+        assert f0_hz.shape == time_s.shape, "freq_fn_hz must return one frequency per time sample"
+        assert np.all(f0_hz > 0), "f0 must be positive"
+
+        phase_rad = 2 * np.pi * cumulative_trapezoid(f0_hz, time_s, initial=0.0) + start_phase_rad
+        n_harmonics = int(np.floor(max_freq_hz / f0_hz.min()))
+
+        sound = np.zeros(n_samples)
+        component_power = np.zeros(n_samples)
+        for harmonic_number in range(1, n_harmonics + 1):
+            component_hz = harmonic_number * f0_hz
+            if taper_hz > 0:
+                taper_weight = np.clip((max_freq_hz - component_hz) / taper_hz, 0.0, 1.0)
+            else:
+                taper_weight = (component_hz <= max_freq_hz).astype(np.float64)
+            amplitude = taper_weight * 10 ** (slope_db_per_octave * np.log2(harmonic_number) / 20.0)
+            if phases == "schroeder":
+                component_phase_rad = -np.pi * harmonic_number * (harmonic_number - 1) / n_harmonics
+            else:
+                component_phase_rad = 0.0
+            sound += amplitude * np.sin(harmonic_number * phase_rad + component_phase_rad)
+            component_power += 0.5 * amplitude ** 2
+
+        if equalize_rms:
+            sound = sound / np.sqrt(np.maximum(component_power, 1e-12)) * np.sqrt(0.5)
+
+        # Same level calibration as sound_maker and fm_sweep_maker
+        normalized_sound = set_dbspl(sound, dbspl)
+        max_amplitude = 0.2753
+        return normalized_sound / (max_amplitude + 0.01)
+
     @staticmethod
     def rounded_triangle_position(cycle_phase, round_fraction, n_table=4096):
         """
