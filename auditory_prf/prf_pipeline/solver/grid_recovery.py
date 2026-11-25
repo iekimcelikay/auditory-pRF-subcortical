@@ -35,6 +35,7 @@ Usage (from project root):
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")
@@ -42,6 +43,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
 
+from auditory_prf.visualization.design_label import label_only_suptitle
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import generate_run_design
 from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import (
@@ -400,8 +402,11 @@ def _apply_jitter(values: np.ndarray, std: float, rng: np.random.Generator) -> n
 
 def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_path: Path,
                    param_names: list = PARAM_NAMES, jitter_frac: float = 0.01,
-                   jitter_seed: int = 0, shuffle_draw_order: bool = True) -> None:
+                   jitter_seed: int = 0, shuffle_draw_order: bool = True,
+                   design_label: Optional[str] = None) -> None:
     """Per-parameter recovery scatter: true (y) vs. recovered (x), unity line.
+
+    ``design_label`` (e.g. 'Harmonic sweeps: 3 rates x 2 tones x 4 ISIs') becomes the figure title; None = no title.
 
     Points are colored by ground-truth combo index, consistently across all
     panels — so a point's color identifies which combo (and therefore which
@@ -465,6 +470,7 @@ def plot_recovery(true_params: np.ndarray, recovered_params: np.ndarray, save_pa
                ncol=max(1, int(np.ceil(n_gt_combos / 20))))
 
     plt.tight_layout()
+    label_only_suptitle(fig, design_label)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Recovery scatter saved -> {save_path.resolve()}")
@@ -507,8 +513,11 @@ def plot_noise_comparison(
     param_names: list = PARAM_NAMES,
     jitter_frac: float = 0.01,
     jitter_seed: int = 0,
+    design_label: Optional[str] = None,
 ) -> None:
     """Per-parameter recovery scatter, overlaying all noise levels for the SAME ground truths.
+
+    ``design_label`` becomes the figure title (None = no title).
 
     Unlike ``plot_recovery`` (which colors by ground-truth combo, for one
     noise level), here color encodes noise level and every ground-truth
@@ -587,6 +596,7 @@ def plot_noise_comparison(
                fontsize=8, title="noise level")
 
     plt.tight_layout()
+    label_only_suptitle(fig, design_label)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Noise-level comparison plot saved -> {save_path.resolve()}")

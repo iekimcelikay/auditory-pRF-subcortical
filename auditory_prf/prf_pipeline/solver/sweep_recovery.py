@@ -73,6 +73,8 @@ from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     save_accuracy_table,
 )
 from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
+from auditory_prf.visualization.design_label import titled
+from stimuli.sweep_design_names import DEFAULT_DESIGN_NAME, DESIGN_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -406,7 +408,7 @@ def save_summary_table(summary: dict, save_path: Path) -> None:
 
 def plot_relative_mse(summary_by_noise: dict, save_path: Path, param_names: list = PARAM_NAMES,
                       n_voxels: Optional[int] = None, n_repeats: Optional[int] = None,
-                      log_y: bool = True) -> None:
+                      log_y: bool = True, design_label: Optional[str] = None) -> None:
     """Bar chart of the relative MSE: one group per parameter, one bar per noise level.
 
     Height = summary["relative_mse"] = mean(((recovered - true) / true)^2); 0 is perfect, the
@@ -448,7 +450,7 @@ def plot_relative_mse(summary_by_noise: dict, save_path: Path, param_names: list
         ax.set_ylim(0, max(1.1, 1.1 * max(all_values)))
     ax.legend(title="noise level", loc="upper left", bbox_to_anchor=(1.01, 1.0))
     size = f" (N={n_voxels} voxels, {n_repeats:,} MC repeats each)" if n_voxels and n_repeats else ""
-    ax.set_title(f"Relative MSE across noise levels{size}")
+    ax.set_title(titled(f"Relative MSE across noise levels{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -461,7 +463,8 @@ RELATIVE_MSE_PLOT_FLOOR = 1e-4      # voxels with exactly 0 error are drawn here
 def plot_relative_mse_distribution(summary_by_noise: dict, save_path: Path,
                                    param_names: list = PARAM_NAMES,
                                    n_voxels: Optional[int] = None,
-                                   n_repeats: Optional[int] = None) -> None:
+                                   n_repeats: Optional[int] = None,
+                                   design_label: Optional[str] = None) -> None:
     """Distribution of the per-voxel relative MSE: one panel per parameter, one box per noise level.
 
     Every dot is one voxel (summary["relative_mse_by_voxel"]: its mean squared relative error over
@@ -507,8 +510,8 @@ def plot_relative_mse_distribution(summary_by_noise: dict, save_path: Path,
     fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=8, frameon=False,
                bbox_to_anchor=(0.5, -0.04))
     size = f" (N={n_voxels} voxels, {n_repeats:,} MC repeats each)" if n_voxels and n_repeats else ""
-    fig.suptitle(f"Per-voxel relative MSE = mean over repeats of ((recovered - true) / true)$^2$"
-                 f"{size}")
+    fig.suptitle(titled(f"Per-voxel relative MSE = mean over repeats of ((recovered - true) / true)$^2$"
+                        f"{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -517,7 +520,8 @@ def plot_relative_mse_distribution(summary_by_noise: dict, save_path: Path,
 
 def plot_relative_mse_by_true_value(summary_by_noise: dict, true_params: np.ndarray,
                                     candidate_params: np.ndarray, save_path: Path,
-                                    param_name: str = "tau_ms", n_repeats: Optional[int] = None) -> None:
+                                    param_name: str = "tau_ms", n_repeats: Optional[int] = None,
+                                    design_label: Optional[str] = None) -> None:
     """Per-voxel relative MSE grouped by the TRUE value of one parameter (default tau_ms).
 
     One group per grid level of param_name, one box per noise level; every dot is a voxel whose
@@ -565,7 +569,7 @@ def plot_relative_mse_by_true_value(summary_by_noise: dict, true_params: np.ndar
     ax.set_ylabel("per-voxel relative MSE")
     ax.legend(title="noise level", loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8)
     size = f" ({n_repeats:,} MC repeats per voxel)" if n_repeats else ""
-    ax.set_title(f"Per-voxel relative MSE by true {param_name}{size}")
+    ax.set_title(titled(f"Per-voxel relative MSE by true {param_name}{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -601,7 +605,8 @@ def recovered_level_fractions(true_value: np.ndarray, recovered_value: np.ndarra
 
 def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_noise: dict,
                                       candidate_params: np.ndarray, save_path: Path,
-                                      param_name: str = "tau_ms", n_repeats: Optional[int] = None) -> None:
+                                      param_name: str = "tau_ms", n_repeats: Optional[int] = None,
+                                      design_label: Optional[str] = None) -> None:
     """Which levels of param_name get recovered: one column per noise level.
 
     Top: share of the recoveries for each TRUE level (rows) that landed on each RECOVERED level
@@ -654,7 +659,7 @@ def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_nois
     fig.colorbar(image, ax=axes[0, :].tolist(), label="share of the recoveries of that true level",
                  shrink=0.8, pad=0.02)
     size = f" ({n_repeats:,} repeats per voxel)" if n_repeats else ""
-    fig.suptitle(f"Recovered {param_name}: true vs recovered level, in % per true level{size}")
+    fig.suptitle(titled(f"Recovered {param_name}: true vs recovered level, in % per true level{size}", design_label))
     fig.text(0.5, 0.005, "Top: each row sums to 100 % (values under 2 % not printed); the diagonal is a correct "
              "recovery. Bottom: bars = share of all recoveries per recovered level.", ha="center", fontsize=8)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -681,9 +686,13 @@ def save_margin_table(true_params: np.ndarray, result: dict, save_path: Path) ->
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results-dir", type=str,
-                        default="models_output/sweep_design_erb_3band/combined")
-    parser.add_argument("--output-dir", type=str, default="sweep_recovery_results")
+    parser.add_argument("--design", choices=DESIGN_NAMES, default=DEFAULT_DESIGN_NAME,
+                        help="Sweep design (stimuli/sweep_design_names.py): picks the run orders, the cochlear results "
+                             "folder, the output folder and the label shown in the plots.")
+    parser.add_argument("--results-dir", type=str, default=None,
+                        help="Combined cochlear results. Default: models_output/<design>/combined.")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Default: sweep_recovery_results/<design>.")
     parser.add_argument("--noise", nargs="+", default=["none"],
                         choices=["none", "low", "mid", "high", "all"],
                         help="One or more noise levels; 'all' = low mid high, run on the same "
@@ -709,19 +718,22 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     signal_scale = signal_scale_for(args.noise_model)
 
-    import stimuli.sweep_design_erb as design   # needs the project root on sys.path
+    from stimuli.sweep_designs import get_design   # needs the project root on sys.path
+    design = get_design(args.design)
+    results_dir = args.results_dir or design.combined_dir
+    output_dir = args.output_dir or design.results_dir
     noise_levels = NOISE_LEVELS if "all" in args.noise else list(dict.fromkeys(args.noise))
     n_repeats_by_noise = {noise: args.n_repeats or (1 if noise == "none" else N_NOISE_REPEATS)
                           for noise in noise_levels}
     timestamp = f"{datetime.now():%Y%m%d_%H%M%S}"
-    run_dir = (Path(args.output_dir) / f"{timestamp}_{'-'.join(noise_levels)}_"
+    run_dir = (Path(output_dir) / f"{timestamp}_{'-'.join(noise_levels)}_"
                f"{args.gt_mode}_design{args.design_seed}")   # seed keeps array tasks apart
     run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("noise=%s (%s model, signal scale %s) gt_mode=%s voxels=%d repeats=%s workers=%d -> %s",
-                noise_levels, args.noise_model, signal_scale, args.gt_mode, args.n_voxels,
+    logger.info("design=%s (%s) noise=%s (%s model, signal scale %s) gt_mode=%s voxels=%d repeats=%s workers=%d -> %s",
+                design.name, design.label, noise_levels, args.noise_model, signal_scale, args.gt_mode, args.n_voxels,
                 n_repeats_by_noise, args.n_workers, run_dir)
 
-    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
+    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(results_dir))
     run_design = design.build_run_design(args.design_seed)
     total_run_dur_s = design.total_run_duration_s(run_design)
     tr_s = design.TR_S
@@ -777,9 +789,10 @@ def main() -> None:
         np.savez(run_dir / f"sweep_recovery_results_design{args.design_seed}_{noise}_{timestamp}.npz",
                  true_params=true_params, recovered_params=recovered,
                  param_names=PARAM_NAMES, noise_model=args.noise_model,
+                 design=design.name, design_label=design.label,
                  **{k: v for k, v in result.items() if k != "recovered_params"})
         plot_recovery(true_params, recovered, run_dir / f"recovery_scatter_{noise}.png",
-                      param_names=PARAM_NAMES)
+                      param_names=PARAM_NAMES, design_label=design.label)
         save_recovery_table(true_params, recovered, run_dir / f"recovery_table_{noise}.csv",
                             param_names=PARAM_NAMES)
         save_margin_table(true_params, result, run_dir / f"margin_table_{noise}.csv")
@@ -790,21 +803,22 @@ def main() -> None:
     plot_accuracy_comparison(accuracy_by_noise,
                              run_dir / f"accuracy_comparison_design{args.design_seed}.png",
                              param_names=PARAM_NAMES, n_voxels=args.n_voxels,
-                             n_repeats=max(n_repeats_by_noise.values()))
+                             n_repeats=max(n_repeats_by_noise.values()), design_label=design.label)
     plot_relative_mse(summary_by_noise, run_dir / f"relative_mse_design{args.design_seed}.png",
                       param_names=PARAM_NAMES, n_voxels=args.n_voxels,
-                      n_repeats=max(n_repeats_by_noise.values()))
+                      n_repeats=max(n_repeats_by_noise.values()), design_label=design.label)
     plot_relative_mse_distribution(
         summary_by_noise, run_dir / f"relative_mse_distribution_design{args.design_seed}.png",
-        param_names=PARAM_NAMES, n_voxels=args.n_voxels, n_repeats=max(n_repeats_by_noise.values()))
+        param_names=PARAM_NAMES, n_voxels=args.n_voxels, n_repeats=max(n_repeats_by_noise.values()),
+        design_label=design.label)
     plot_relative_mse_by_true_value(
         summary_by_noise, true_params, candidate_params,
         run_dir / f"relative_mse_by_tau_design{args.design_seed}.png",
-        param_name="tau_ms", n_repeats=max(n_repeats_by_noise.values()))
+        param_name="tau_ms", n_repeats=max(n_repeats_by_noise.values()), design_label=design.label)
     if len(noise_levels) > 1:
         plot_noise_comparison(true_params, recovered_by_noise,
                               run_dir / f"noise_comparison_design{args.design_seed}.png",
-                              param_names=PARAM_NAMES)
+                              param_names=PARAM_NAMES, design_label=design.label)
     logger.info("done -> %s", run_dir.resolve())
 
 

@@ -15,7 +15,7 @@ Every stage output is saved per stimulus, so the stages can be inspected separat
 
 Run from the project root:
     python auditory_prf/prf_pipeline/full_pipeline_sweeps_adaptrans.py \
-        --results-dir models_output/sweep_design_erb_3band/combined
+        --results-dir models_output/sweep_design_erb3band/combined
 
 --exclude-n-cycles N [N ...] skips stimuli with those cycle counts; the silent trial
 (silence_20s) has n_cycles = 0 in its metadata.

@@ -43,6 +43,14 @@ from auditory_prf.prf_pipeline.solver.grid_recovery import (
     plot_recovery,
     save_recovery_table,
 )
+from auditory_prf.prf_pipeline.solver.highpass import (
+    DEFAULT_HIGHPASS_CUTOFFS_S,
+    check_cutoff,
+    filter_name,
+    highpass_projection,
+    highpass_template_per_run,
+    parse_cutoffs,
+)
 from auditory_prf.prf_pipeline.solver.kim2024_style_recovery import (
     compute_accuracy_correlations,
     plot_accuracy_comparison,
@@ -74,21 +82,27 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     save_summary_table,
     summarize,
 )
+from auditory_prf.visualization.design_label import titled
+from stimuli.sweep_design_names import DEFAULT_DESIGN_NAME, DESIGN_NAMES
 
 logger = logging.getLogger(__name__)
 
 RUN_DESIGN_SEEDS = tuple(range(1000, 1024))      # 24 run orders, one per design seed
 RUN_PREFIX = "sweep_recovery_24runs"             # result-file prefix (see replot_from_results.py)
 N_REPEATS = 1000                                 # Monte Carlo repeats per noise level (one repeat = one experiment)
-DEFAULT_RESULTS_DIR = "models_output/sweep_design_erb_3band/combined"
-DEFAULT_GRID_DIR = "sweep_recovery_multirun_grids"
-DEFAULT_OUTPUT_DIR = "sweep_recovery_results"
 ESTIMATES = ("fixed_effects",)                   # the 24-run estimate (mean r^2 over runs, argmax)
+# Folders follow the design name (stimuli/sweep_design_names.py): models_output/<design>/combined,
+# sweep_recovery_multirun_grids/<design>, sweep_recovery_results/<design>.
 
 
 # ── Run designs and per-run grids ─────────────────────────────────────────────
-def build_run_designs(design_seeds: Sequence[int]) -> tuple:
+def build_run_designs(design_seeds: Sequence[int], design=None) -> tuple:
     """Run orders of the given design seeds.
+
+    Parameters
+    ----------
+    design : stimuli.sweep_designs.SweepDesign, optional
+        Default: the ERB 3-band design (sweep_design_erb3band).
 
     Returns
     -------
@@ -96,7 +110,9 @@ def build_run_designs(design_seeds: Sequence[int]) -> tuple:
     total_run_dur_s : float
         Common run length in seconds (asserted equal for every run).
     """
-    import stimuli.sweep_design_erb as design   # needs the project root on sys.path
+    if design is None:
+        from stimuli.sweep_designs import get_design   # needs the project root on sys.path
+        design = get_design()
     run_designs = [design.build_run_design(seed) for seed in design_seeds]
     durations_s = [design.total_run_duration_s(run_design) for run_design in run_designs]
     assert np.allclose(durations_s, durations_s[0]), f"run durations differ: {durations_s}"
@@ -300,6 +316,10 @@ def _recover_one_voxel_multirun(v_i: int, true_row: np.ndarray, state: dict) -> 
             clean_bold_per_run, state["noise"], state["tr_s"], v_i, rep, state["jitter"],
             signal_scale=state.get("signal_scale"))
     measurements = measurements.reshape(n_repeats, n_runs, n_tr)
+    projection = state.get("projection")
+    if projection is not None:     # same noise draws, slow components of every run removed (templates filtered too)
+        measurements = measurements @ projection.astype(np.float32)
+        clean_bold_per_run = [bold @ projection for bold in clean_bold_per_run]
 
     level_indices, top_n = state["level_indices"], TOP_N_MATCHES
     fixed = match_details_fixed_effects(template_per_run_norm, measurements, level_indices, top_n,
@@ -336,6 +356,7 @@ def run_recovery_multirun(
     jitter: Optional[list] = NOISE_JITTER,
     signal_scale: Optional[float] = None,
     full_score_repeats: int = 0,
+    projection: Optional[np.ndarray] = None,
 ) -> dict:
     """Monte Carlo recovery from all runs, one noise level: the fixed-effects estimate.
 
@@ -348,6 +369,10 @@ def run_recovery_multirun(
         ``normalize_run_templates`` output (one matrix per run).
     full_score_repeats : int
         The mean-r^2 vector over all candidates is kept for the first this many repeats of every voxel (0 = none).
+    projection : np.ndarray, shape (n_tr, n_tr), optional
+        High-pass projection (``highpass.highpass_projection``) applied to every run of the noisy measurement and
+        of the clean signal used for the margins. ``template_per_run_norm`` must then be made from templates
+        filtered with the same projection (``highpass.highpass_template_per_run``). None = no filter.
 
     Returns
     -------
@@ -369,7 +394,7 @@ def run_recovery_multirun(
                  hrf_kernel=hrf_kernel, candidate_params=candidate_params,
                  template_per_run_norm=template_per_run_norm, noise=noise, n_repeats=n_repeats,
                  jitter=jitter, signal_scale=signal_scale, full_score_repeats=full_score_repeats,
-                 level_indices=level_indices_from_params(candidate_params))
+                 projection=projection, level_indices=level_indices_from_params(candidate_params))
     if n_workers > 1:
         voxel_results = list(map_voxels(_recover_one_voxel_multirun, true_params, state, n_workers))
     else:
@@ -457,7 +482,7 @@ def save_run_comparison_table(summary_by_method: dict, save_path: Path) -> None:
 
 
 def plot_run_comparison(summary_by_method: dict, save_path: Path, n_voxels: Optional[int] = None,
-                        n_repeats: Optional[int] = None) -> None:
+                        n_repeats: Optional[int] = None, design_label: Optional[str] = None) -> None:
     """Relative MSE of the methods side by side: one panel per parameter, one group per noise level,
     one bar per method (1 run, 24 runs with fixed effects); black tick = chance level; log y axis.
     """
@@ -493,7 +518,7 @@ def plot_run_comparison(summary_by_method: dict, save_path: Path, n_voxels: Opti
     fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=8, frameon=False,
                bbox_to_anchor=(0.5, -0.06))
     size = f" (N={n_voxels} voxels, {n_repeats:,} MC repeats each)" if n_voxels and n_repeats else ""
-    fig.suptitle(f"Relative MSE: 1 run vs 24 runs{size}")
+    fig.suptitle(titled(f"Relative MSE: 1 run vs 24 runs{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -528,7 +553,8 @@ def save_spread_table(spread_by_noise: dict, chance_spread_by_param: np.ndarray,
 
 
 def plot_estimate_spread(spread_by_noise: dict, chance_spread_by_param: np.ndarray, save_path: Path,
-                         n_voxels: Optional[int] = None, n_repeats: Optional[int] = None) -> None:
+                         n_voxels: Optional[int] = None, n_repeats: Optional[int] = None,
+                         design_label: Optional[str] = None) -> None:
     """How wide are the 24 per-run estimates: one panel per parameter, one box per noise level.
 
     Every dot is a voxel (the median over its repeats of the standard deviation across the 24
@@ -558,7 +584,7 @@ def plot_estimate_spread(spread_by_noise: dict, chance_spread_by_param: np.ndarr
     fig.legend(handles=_spread_legend_handles(noise_levels), loc="lower center", ncol=2, fontsize=8,
                frameon=False, bbox_to_anchor=(0.5, -0.12))
     size = f" (N={n_voxels} voxels, {n_repeats:,} MC repeats each)" if n_voxels and n_repeats else ""
-    fig.suptitle(f"Width of the 24 per-run estimates{size}")
+    fig.suptitle(titled(f"Width of the 24 per-run estimates{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -568,7 +594,7 @@ def plot_estimate_spread(spread_by_noise: dict, chance_spread_by_param: np.ndarr
 def plot_spread_by_true_value(spread_by_noise: dict, true_params: np.ndarray,
                               chance_spread_by_param: np.ndarray, candidate_params: np.ndarray,
                               save_path: Path, param_name: str = "tau_ms",
-                              n_repeats: Optional[int] = None) -> None:
+                              n_repeats: Optional[int] = None, design_label: Optional[str] = None) -> None:
     """Spread of the 24 per-run estimates grouped by the TRUE value of one parameter (default tau_ms).
 
     One group per grid level, one box per noise level; every dot is a voxel with that true value
@@ -606,7 +632,7 @@ def plot_spread_by_true_value(spread_by_noise: dict, true_params: np.ndarray,
     ax.legend(handles=_spread_legend_handles(noise_levels), loc="upper left",
               bbox_to_anchor=(1.01, 1.0), fontsize=8)
     size = f" ({n_repeats:,} MC repeats per voxel)" if n_repeats else ""
-    ax.set_title(f"Width of the 24 per-run {param_name} estimates by true {param_name}{size}")
+    ax.set_title(titled(f"Width of the 24 per-run {param_name} estimates by true {param_name}{size}", design_label))
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -633,8 +659,14 @@ def recover_and_report(
     n_workers: int = 1,
     signal_scale: Optional[float] = None,
     full_score_repeats: int = 5,
+    highpass_cutoff_s: Optional[float] = None,
+    design_name: Optional[str] = None,
+    design_label: Optional[str] = None,
 ) -> Path:
     """Run the 24-run recovery at every noise level and write all tables, plots and result files.
+
+    ``design_name`` / ``design_label`` (stimuli/sweep_design_names.py) are stored in every result file and the label is
+    shown in the title of every plot; None = neither (the output is as before).
 
     ``full_score_repeats``: the full mean-r^2 vector over all candidates is saved for the first this many repeats
     of every voxel (0 = none).
@@ -650,25 +682,41 @@ def recover_and_report(
     estimate from run 1 alone in the same call, and ``baseline_dir`` may be None if every noise
     level is ``"none"``.
 
+    ``highpass_cutoff_s``: None = the unfiltered recovery (unchanged). A number = the same recovery after
+    removing the slow DCT components (period longer than the cutoff, seconds) from the measurement and the
+    templates of every run, on the same noise seeds; the result folder gets the suffix ``_hp<cutoff>``, the npz
+    files the key ``highpass_cutoff_s``, and the "1-run" column is run 1 alone of this call (the single-run
+    baseline files are unfiltered), so ``baseline_dir`` may be None.
+
     Returns
     -------
-    Path of the result folder ``<output_dir>/<timestamp>_<noises>_on_grid_<n>runs``.
+    Path of the result folder ``<output_dir>/<timestamp>_<noises>_on_grid_<n>runs`` (``..._hp<cutoff>`` for a
+    filtered pass).
     """
+    if highpass_cutoff_s is not None:         # before anything is created or computed
+        check_cutoff(template_per_run[0].shape[1], tr_s, highpass_cutoff_s)
     timestamp = f"{datetime.now():%Y%m%d_%H%M%S}"
+    filter_suffix = "" if highpass_cutoff_s is None else f"_{filter_name(highpass_cutoff_s)}"
     run_dir = (Path(output_dir) /
-               f"{timestamp}_{'-'.join(noise_levels)}_on_grid_{len(design_seeds)}runs")
+               f"{timestamp}_{'-'.join(noise_levels)}_on_grid_{len(design_seeds)}runs{filter_suffix}")
     run_dir.mkdir(parents=True, exist_ok=True)
     first_seed = design_seeds[0]
     noise_model = "legacy" if signal_scale is None else "additive"
     logger.info("noise=%s (%s model) voxels=%d repeats=%d runs=%d workers=%d -> %s", noise_levels,
                 noise_model, n_voxels, n_repeats, len(design_seeds), n_workers, run_dir)
 
+    projection, filter_saved = None, {}
+    if highpass_cutoff_s is not None:
+        projection = highpass_projection(template_per_run[0].shape[1], tr_s, highpass_cutoff_s)
+        template_per_run = highpass_template_per_run(template_per_run, projection)
+        filter_saved = {"highpass_cutoff_s": highpass_cutoff_s}
     template_per_run_norm = normalize_run_templates(template_per_run)
     true_params = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(cf_list_hz),
                                        candidate_params, n_voxels)
 
     # load the baselines first: a mismatch should stop the job before the expensive recovery
-    needs_baseline = [noise for noise in noise_levels if noise != "none"]
+    # (a filtered pass has none: the single-run baseline files are unfiltered)
+    needs_baseline = [noise for noise in noise_levels if noise != "none" and highpass_cutoff_s is None]
     assert baseline_dir is not None or not needs_baseline, \
         f"baseline_dir is required for the noise levels {needs_baseline}"
     baselines = {noise: load_baseline_results(baseline_dir, noise, n_repeats, true_params)
@@ -685,10 +733,13 @@ def recover_and_report(
         result = run_recovery_multirun(
             raw_psth_by_seq, run_designs, total_run_dur_s, tr_s, silence_seq_id, hrf_kernel,
             candidate_params, template_per_run_norm, true_params, noise,
-            n_repeats, n_workers, signal_scale=signal_scale, full_score_repeats=full_score_repeats)
+            n_repeats, n_workers, signal_scale=signal_scale, full_score_repeats=full_score_repeats,
+            projection=projection)
         logger.info("[%s] fixed-effects winner has a negative mean r in %.4f of the repeats", noise,
                     float(np.mean(result["winner_mean_r"] < 0)))
-        if noise == "none":     # no single-run result file: run 1 alone of this call is the 1-run column
+        if noise == "none" or highpass_cutoff_s is not None:
+            # no single-run result file (noise-free, or the baseline files are unfiltered): run 1 alone of this
+            # call is the 1-run column
             baseline_result = {"recovered_params": result["recovered_first_run"],
                                "margins": result["margins"], "n_ties": result["n_ties"]}
         else:
@@ -732,9 +783,11 @@ def recover_and_report(
             saved = {k: v for k, v in result.items() if k != "recovered_params"}
             np.savez(run_dir / f"{RUN_PREFIX}_{estimate}_results_design{first_seed}_{noise}_{timestamp}.npz",
                      true_params=true_params, recovered_params=recovered[estimate],
-                     param_names=PARAM_NAMES, noise_model=noise_model, **saved)
+                     param_names=PARAM_NAMES, noise_model=noise_model,
+                     design=design_name or "", design_label=design_label or "", **filter_saved, **saved)
             plot_recovery(true_params, recovered[estimate],
-                          run_dir / f"recovery_scatter_{estimate}_{noise}.png", param_names=PARAM_NAMES)
+                          run_dir / f"recovery_scatter_{estimate}_{noise}.png", param_names=PARAM_NAMES,
+                          design_label=design_label)
             save_recovery_table(true_params, recovered[estimate],
                                 run_dir / f"recovery_table_{estimate}_{noise}.csv", param_names=PARAM_NAMES)
             save_summary_table(summaries[f"24run_{estimate}"],
@@ -745,29 +798,33 @@ def recover_and_report(
         save_accuracy_table(accuracy[estimate], run_dir / f"accuracy_table_{estimate}.csv",
                             param_names=PARAM_NAMES)
         plot_accuracy_comparison(accuracy[estimate], run_dir / f"accuracy_comparison_{estimate}.png",
-                                 param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats)
+                                 param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats,
+                                 design_label=design_label)
         plot_relative_mse(estimate_summary[estimate], run_dir / f"relative_mse_{estimate}.png",
-                          param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats)
+                          param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats,
+                          design_label=design_label)
         plot_relative_mse_distribution(
             estimate_summary[estimate], run_dir / f"relative_mse_distribution_{estimate}.png",
-            param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats)
+            param_names=PARAM_NAMES, n_voxels=n_voxels, n_repeats=n_repeats, design_label=design_label)
         plot_relative_mse_by_true_value(
             estimate_summary[estimate], true_params, candidate_params,
-            run_dir / f"relative_mse_by_tau_{estimate}.png", param_name="tau_ms", n_repeats=n_repeats)
+            run_dir / f"relative_mse_by_tau_{estimate}.png", param_name="tau_ms", n_repeats=n_repeats,
+            design_label=design_label)
     for method, recovered_by_noise in recovered_by_method.items():      # true-vs-recovered tau heatmaps
         plot_recovered_level_distribution(
             true_params, recovered_by_noise, candidate_params,
             run_dir / f"recovered_tau_distribution_{method}.png", param_name="tau_ms",
-            n_repeats=n_repeats)
+            n_repeats=n_repeats, design_label=design_label)
     save_run_comparison_table(summary_by_method, run_dir / "run_comparison_table.csv")
-    plot_run_comparison(summary_by_method, run_dir / "run_comparison.png", n_voxels, n_repeats)
+    plot_run_comparison(summary_by_method, run_dir / "run_comparison.png", n_voxels, n_repeats,
+                        design_label=design_label)
     save_spread_table(spread_by_noise, chance_spread(candidate_params, cf_list_hz),
                       run_dir / "spread_table.csv")
     plot_estimate_spread(spread_by_noise, chance_spread(candidate_params, cf_list_hz),
-                         run_dir / "estimate_spread.png", n_voxels, n_repeats)
+                         run_dir / "estimate_spread.png", n_voxels, n_repeats, design_label=design_label)
     plot_spread_by_true_value(spread_by_noise, true_params, chance_spread(candidate_params, cf_list_hz),
                               candidate_params, run_dir / "estimate_spread_by_tau.png",
-                              param_name="tau_ms", n_repeats=n_repeats)
+                              param_name="tau_ms", n_repeats=n_repeats, design_label=design_label)
     logger.info("done -> %s", run_dir.resolve())
     return run_dir
 
@@ -776,20 +833,31 @@ def _build_parser() -> argparse.ArgumentParser:
     n_workers_default = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
+    design_option = argparse.ArgumentParser(add_help=False)       # shared by both commands
+    design_option.add_argument("--design", choices=DESIGN_NAMES, default=DEFAULT_DESIGN_NAME,
+                               help="Sweep design (stimuli/sweep_design_names.py): picks the run orders, the folders "
+                                    "and the label shown in the plots.")
 
-    grid = commands.add_parser("build-grid", help="candidate grid of ONE run order (un-normalised)")
+    grid = commands.add_parser("build-grid", parents=[design_option],
+                               help="candidate grid of ONE run order (un-normalised)")
     grid.add_argument("--design-seed", type=int, required=True)
-    grid.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
-    grid.add_argument("--output-dir", default=DEFAULT_GRID_DIR)
+    grid.add_argument("--results-dir", default=None,
+                      help="Combined cochlear results. Default: models_output/<design>/combined.")
+    grid.add_argument("--output-dir", default=None,
+                      help="Default: sweep_recovery_multirun_grids/<design>.")
     grid.add_argument("--n-workers", type=int, default=n_workers_default)
 
-    recover = commands.add_parser("recover", help="24-run recovery (fixed effects: mean r^2 over runs)")
-    recover.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
-    recover.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
+    recover = commands.add_parser("recover", parents=[design_option],
+                                  help="24-run recovery (fixed effects: mean r^2 over runs)")
+    recover.add_argument("--results-dir", default=None,
+                         help="Combined cochlear results. Default: models_output/<design>/combined.")
+    recover.add_argument("--grid-dir", default=None,
+                         help="Default: sweep_recovery_multirun_grids/<design>.")
     recover.add_argument("--baseline-dir", default=None,
                          help="folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz "
-                              "(required unless --noise is only 'none')")
-    recover.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+                              "(required unless --noise is only 'none'); e.g. a folder under sweep_recovery_results/<design>/")
+    recover.add_argument("--output-dir", default=None,
+                         help="Default: sweep_recovery_results/<design>.")
     recover.add_argument("--noise", nargs="+", default=["low", "mid", "high"],
                          choices=["none", "low", "mid", "high"],
                          help="'none' = noise-free test (use --n-repeats 1)")
@@ -803,35 +871,44 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="additive: MATLAB-style noise added as is to the signal scaled by one global "
                               "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
                               "std(bold) per voxel (the earlier results)")
+    recover.add_argument("--highpass-cutoffs", type=float, nargs="*", default=list(DEFAULT_HIGHPASS_CUTOFFS_S),
+                         help="high-pass cutoffs in seconds; each one is recovered in its own result folder "
+                              "(suffix _hp<cutoff>) next to the unfiltered recovery, on the same noise; "
+                              "give the option without values (or 0) for the unfiltered recovery only")
     return parser
 
 
 def main(argv: Optional[list] = None) -> None:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    import stimuli.sweep_design_erb as design   # needs the project root on sys.path
-    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
+    from stimuli.sweep_designs import get_design   # needs the project root on sys.path
+    design = get_design(args.design)
+    logger.info("design=%s (%s)", design.name, design.label)
+    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir or design.combined_dir))
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
 
     if args.command == "build-grid":
-        run_designs, total_run_dur_s = build_run_designs([args.design_seed])
+        run_designs, total_run_dur_s = build_run_designs([args.design_seed], design)
         candidate_params, template_matrix = build_candidate_grid(
             raw_psth_by_seq, len(cf_list_hz), run_designs[0], total_run_dur_s, design.TR_S,
             design.SILENCE_SEQ_ID, hrf_kernel, n_workers=args.n_workers, normalize=False)
-        save_run_grid(Path(args.output_dir) / f"run_grid_design{args.design_seed}.npz",
+        save_run_grid(Path(args.output_dir or design.grid_dir) / f"run_grid_design{args.design_seed}.npz",
                       candidate_params, template_matrix)
     else:
         if args.baseline_dir is None and any(noise != "none" for noise in args.noise):
             raise SystemExit("--baseline-dir is required unless --noise is only 'none'")
-        run_designs, total_run_dur_s = build_run_designs(args.design_seeds)
-        candidate_params, template_per_run = load_run_grids(Path(args.grid_dir), args.design_seeds)
-        recover_and_report(
-            raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
-            design.SILENCE_SEQ_ID, hrf_kernel, candidate_params, template_per_run,
-            Path(args.baseline_dir) if args.baseline_dir else None, Path(args.output_dir),
-            list(dict.fromkeys(args.noise)),
-            args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers,
-            signal_scale=signal_scale_for(args.noise_model), full_score_repeats=args.full_score_repeats)
+        run_designs, total_run_dur_s = build_run_designs(args.design_seeds, design)
+        candidate_params, template_per_run = load_run_grids(Path(args.grid_dir or design.grid_dir), args.design_seeds)
+        for cutoff_s in [None, *parse_cutoffs(args.highpass_cutoffs)]:     # unfiltered first, then each filter
+            recover_and_report(
+                raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
+                design.SILENCE_SEQ_ID, hrf_kernel, candidate_params, template_per_run,
+                Path(args.baseline_dir) if args.baseline_dir else None,
+                Path(args.output_dir or design.results_dir),
+                list(dict.fromkeys(args.noise)),
+                args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers,
+                signal_scale=signal_scale_for(args.noise_model), full_score_repeats=args.full_score_repeats,
+                highpass_cutoff_s=cutoff_s, design_name=design.name, design_label=design.label)
 
 
 if __name__ == "__main__":

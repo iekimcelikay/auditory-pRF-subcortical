@@ -1,8 +1,11 @@
-"""Full spike-train cochlea model (PSTH) for centered FM-sweep WAVs, one WAV per task.
+"""Full spike-train cochlea model (PSTH) for FM-sweep WAVs, one WAV per task.
 
-WAV names follow stimuli/sweep_design_centered.centered_seq_id plus the rate suffix
-added by stimuli/render_sweep_design_wavs.py, e.g.
-    fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav
+The WAV folder is stimuli/produced/<design name> (see stimuli/sweep_design_names.py) and the results go to
+models_output/<folder name>. Names it understands (parse_sweep_filename):
+    harmonic_sweep_armA_01_rate6hz_dur167ms_isi83ms.wav        harmonic sweeps with silences (stimuli/render_harmonic_sweep_wavs.py)
+    fmsweep_fc193.9hz_lo125.0hz_hi276.2hz_010cyc_0.50hz.wav   ERB 3-band design (stimuli/render_sweep_design_erb_wavs.py)
+    fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav          earlier centered design
+    silence_20s.wav                                            the silent trial
 
 Optional CF batching splits the CF axis over several tasks (CFs are independent in
 the Zilany model). Each batch writes its own file, suffixed ``_cfb<idx>``; the
@@ -13,16 +16,20 @@ import argparse
 import math
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
 import soundfile as sf
 
+sys.path.insert(0, str(Path(__file__).parent.parent))      # so that `stimuli` is importable from examples/
+
 from auditory_prf.peripheral_models.cochlea_config import CochleaConfig
 from auditory_prf.peripheral_models.cochlea_simulation import CochleaWavSimulation
+from stimuli.sweep_design_names import DEFAULT_DESIGN_NAME, check_design_name, design_label, wav_dir
 
 PROJECT_ROOT = Path(os.environ.get("AUDITORY_PRF_ROOT", Path(__file__).parent.parent))
-WAV_DIR_DEFAULT = PROJECT_ROOT / "stimuli" / "produced" / "sweep_design_erb_3band"
+WAV_DIR_DEFAULT = PROJECT_ROOT / wav_dir(DEFAULT_DESIGN_NAME)      # stimuli/produced/sweep_design_erb3band
 
 SWEEP_DURATION_S = 19.9   # sweep part of a 20 s trial (sweep_design_centered.SWEEP_DURATION_S)
 SILENCE_S = 0.1           # silence at the end of every trial (sweep_design_centered.SILENCE_S)
@@ -44,17 +51,17 @@ SWEEP_NAME_PATTERN = re.compile(
 # Silent trial (stimuli/render_sweep_design_erb_wavs.py --silence): silence_20s.wav
 SILENCE_NAME_PATTERN = re.compile(r"^silence_(?P<duration_s>\d+)s")
 
-# Tone/ISI design (auditory-prf-docs-all/fm_sweep_silence_kim_design.md, family P2): full-band tones separated by
-# silences, 20 s trials made of identical [tone, ISI] blocks, e.g.
-#   armB_01_harm2500_rate6hz_dur167ms_isi167ms.wav   (harmonic carrier, 2500 Hz ceiling)
-#   armA_05_sine_rate12hz_dur167ms_isi83ms.wav       (sine carrier)
-# dur / isi are the name-rounded milliseconds (tone = 166.67 ms x k, ISI = 83.33 ms x j).
+# Harmonic sweeps with silences (stimuli/render_harmonic_sweep_wavs.py, family P2): full-band tones separated by ISIs,
+# 20 s trials of identical [tone, ISI] blocks, e.g.
+#   harmonic_sweep_armB_01_rate6hz_dur167ms_isi167ms.wav
+# dur / isi are the name-rounded milliseconds (tone = 166.67 ms x k, ISI = 83.33 ms x j); the exact values and the
+# rendering parameters are in the folder's design_info.json.
 TONE_ISI_NAME_PATTERN = re.compile(
-    r"^(?P<arm>arm[A-Z])_(?P<index>\d{2})_(?P<carrier>sine|harm(?P<max_harmonic_hz>\d+))"
+    r"^(?P<design>harmonic_sweep_arm[A-Z])_(?P<index>\d{2})"
     r"_rate(?P<rate_hz>\d+(?:\.\d+)?)hz_dur(?P<tone_ms>\d+)ms_isi(?P<isi_ms>\d+)ms"
 )
 TONE_ISI_TRIAL_DURATION_S = 20.0
-TONE_ISI_LOWER_HZ = 125.0     # every tone sweeps the full band (f0 for the harmonic carrier)
+TONE_ISI_LOWER_HZ = 125.0     # every tone sweeps the full band (f0 of the harmonic complex)
 TONE_ISI_UPPER_HZ = 800.0
 
 
@@ -70,11 +77,11 @@ def parse_sweep_filename(filename: str) -> dict:
     ----------
     filename : str
         ERB-band name ``fmsweep_fc193.9hz_lo125.0hz_hi276.2hz_010cyc_0.50hz.wav``, old
-        centered name ``fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav``, tone/ISI name
-        ``armB_01_harm2500_rate6hz_dur167ms_isi167ms.wav`` (keys: stimulus_type
-        "fm_sweep_tones", arm, condition_index, carrier, max_harmonic_hz, rate_hz, tone_ms,
-        isi_ms, lower_hz, upper_hz, width_oct, width_erb, trial_duration_s), or the silent
-        trial ``silence_20s.wav``.
+        centered name ``fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav``, harmonic-sweep name
+        ``harmonic_sweep_armB_01_rate6hz_dur167ms_isi167ms.wav`` (keys: stimulus_type
+        "harmonic_sweep_tones", design, design_label, arm, condition_index, carrier, rate_hz,
+        tone_ms, isi_ms, lower_hz, upper_hz, width_oct, width_erb, trial_duration_s), or the
+        silent trial ``silence_20s.wav``.
 
     Returns
     -------
@@ -97,13 +104,14 @@ def parse_sweep_filename(filename: str) -> dict:
                 "n_cycles": 0}
     tone_isi_match = TONE_ISI_NAME_PATTERN.match(filename)
     if tone_isi_match is not None:
-        is_harmonic = tone_isi_match.group("carrier") != "sine"
+        design = check_design_name(tone_isi_match.group("design"))
         return {
-            "stimulus_type": "fm_sweep_tones",
-            "arm": tone_isi_match.group("arm"),
+            "stimulus_type": "harmonic_sweep_tones",
+            "design": design,
+            "design_label": design_label(design),
+            "arm": design.rsplit("_", 1)[-1],                      # "armA" / "armB"
             "condition_index": int(tone_isi_match.group("index")),
-            "carrier": "harmonic" if is_harmonic else "sine",
-            "max_harmonic_hz": float(tone_isi_match.group("max_harmonic_hz")) if is_harmonic else None,
+            "carrier": "harmonic",
             "rate_hz": float(tone_isi_match.group("rate_hz")),
             "tone_ms": float(tone_isi_match.group("tone_ms")),
             "isi_ms": float(tone_isi_match.group("isi_ms")),

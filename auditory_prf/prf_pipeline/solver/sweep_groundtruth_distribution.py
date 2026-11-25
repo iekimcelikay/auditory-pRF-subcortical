@@ -38,11 +38,10 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     sample_ground_truths,
 )
 from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
-    DEFAULT_GRID_DIR,
-    DEFAULT_RESULTS_DIR,
     RUN_DESIGN_SEEDS,
     build_run_designs,
 )
+from stimuli.sweep_design_names import DEFAULT_DESIGN_NAME, DESIGN_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ NOISE_JITTER_GROUNDTRUTH = [0.1, 0.1, 0.1]       # PmNoise jitter (frequency, am
 N_REPEATS = 1000                                 # noisy copies per voxel, run and noise level
 NOISE_LEVELS = ("low", "mid", "high")
 SEED_TAG_GROUNDTRUTH = 1                         # seed stream of these draws (recovery uses tag 2)
-DEFAULT_OUTPUT_DIR = "sweep_groundtruth_results"
+# default folders follow the design name: sweep_groundtruth_results/<design> (stimuli/sweep_design_names.py)
 
 
 # ── Draws ─────────────────────────────────────────────────────────────────────
@@ -171,8 +170,12 @@ def build_groundtruth_distribution(
     jitter: list = NOISE_JITTER_GROUNDTRUTH,
     n_workers: int = 1,
     signal_scale: Optional[float] = None,
+    design_name: Optional[str] = None,
+    design_label: Optional[str] = None,
 ) -> dict:
     """Save the distribution of noisy signals of every voxel and its mean (the new ground truth).
+
+    ``design_name`` / ``design_label`` (stimuli/sweep_design_names.py) are stored in the mean file; None = empty.
 
     Voxels are streamed into a memory-mapped ``groundtruth_distribution_<noise>.npy`` (float32,
     (n_voxels, n_repeats, n_runs, n_tr)); ``groundtruth_mean_<noise>.npz`` is written LAST, so its
@@ -234,7 +237,8 @@ def build_groundtruth_distribution(
              design_seeds=np.asarray(design_seeds), seed_tag=SEED_TAG_GROUNDTRUTH, tr_s=tr_s,
              param_names=np.asarray(PARAM_NAMES),
              noise_model="legacy" if signal_scale is None else "additive",
-             signal_scale=np.nan if signal_scale is None else signal_scale)
+             signal_scale=np.nan if signal_scale is None else signal_scale,
+             design=design_name or "", design_label=design_label or "")
     logger.info("[%s] ground truth (mean of %d draws) saved -> %s", noise, n_repeats,
                 mean_path.resolve())
     return {"distribution_path": distribution_path, "mean_path": mean_path}
@@ -244,11 +248,16 @@ def build_groundtruth_distribution(
 def _build_parser() -> argparse.ArgumentParser:
     n_workers_default = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
-    parser.add_argument("--grid-dir", default=DEFAULT_GRID_DIR,
+    parser.add_argument("--design", choices=DESIGN_NAMES, default=DEFAULT_DESIGN_NAME,
+                        help="Sweep design (stimuli/sweep_design_names.py): picks the run orders, the folders and "
+                             "the label stored in the result files.")
+    parser.add_argument("--results-dir", default=None,
+                        help="Combined cochlear results. Default: models_output/<design>/combined.")
+    parser.add_argument("--grid-dir", default=None,
                         help="folder with run_grid_design<seed>.npz (only the candidate parameters are read, "
-                             "to draw the same on-grid voxels as the earlier results)")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+                             "to draw the same on-grid voxels as the earlier results). "
+                             "Default: sweep_recovery_multirun_grids/<design>.")
+    parser.add_argument("--output-dir", default=None, help="Default: sweep_groundtruth_results/<design>.")
     parser.add_argument("--noise", nargs="+", default=list(NOISE_LEVELS),
                         choices=["low", "mid", "high"])
     parser.add_argument("--n-voxels", type=int, default=N_VOXELS)
@@ -268,24 +277,26 @@ def main(argv: Optional[list] = None) -> None:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     signal_scale = signal_scale_for(args.noise_model)
-    import stimuli.sweep_design_erb as design   # needs the project root on sys.path
-    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir))
+    from stimuli.sweep_designs import get_design   # needs the project root on sys.path
+    design = get_design(args.design)
+    raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir or design.combined_dir))
     hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
-    run_designs, total_run_dur_s = build_run_designs(args.design_seeds)
-    candidate_params = load_candidate_params(Path(args.grid_dir), args.design_seeds[0])
+    run_designs, total_run_dur_s = build_run_designs(args.design_seeds, design)
+    candidate_params = load_candidate_params(Path(args.grid_dir or design.grid_dir), args.design_seeds[0])
     true_params = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(cf_list_hz),
                                        candidate_params, args.n_voxels)
 
-    run_dir = (Path(args.output_dir) /
+    run_dir = (Path(args.output_dir or design.groundtruth_dir) /
                f"{datetime.now():%Y%m%d_%H%M%S}_groundtruth_{len(args.design_seeds)}runs")
-    logger.info("noise=%s (%s model, signal scale %s) voxels=%d repeats=%d runs=%d jitter=%s workers=%d -> %s",
-                args.noise, args.noise_model, signal_scale, args.n_voxels, args.n_repeats,
-                len(args.design_seeds), args.jitter, args.n_workers, run_dir)
+    logger.info("design=%s (%s) noise=%s (%s model, signal scale %s) voxels=%d repeats=%d runs=%d jitter=%s "
+                "workers=%d -> %s", design.name, design.label, args.noise, args.noise_model, signal_scale,
+                args.n_voxels, args.n_repeats, len(args.design_seeds), args.jitter, args.n_workers, run_dir)
     for noise in dict.fromkeys(args.noise):
         build_groundtruth_distribution(
             raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
             design.SILENCE_SEQ_ID, hrf_kernel, true_params, noise, args.n_repeats, run_dir,
-            args.design_seeds, jitter=args.jitter, n_workers=args.n_workers, signal_scale=signal_scale)
+            args.design_seeds, jitter=args.jitter, n_workers=args.n_workers, signal_scale=signal_scale,
+            design_name=design.name, design_label=design.label)
     logger.info("done -> %s", run_dir.resolve())
 
 

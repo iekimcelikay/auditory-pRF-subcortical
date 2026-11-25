@@ -58,12 +58,14 @@ discussion.)
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from auditory_prf.visualization.design_label import titled
 from auditory_prf.prf_pipeline.hrf import build_hrf_kernel, SUBCORTICAL_PARAMS
 from auditory_prf.prf_pipeline.run_assembly import generate_run_design
 from auditory_prf.prf_pipeline.full_pipeline_toneclouds_adaptrans_claude import (
@@ -333,7 +335,8 @@ def save_accuracy_table(accuracy_by_noise: dict, save_path: Path, param_names: l
 
 
 def plot_accuracy_comparison(accuracy_by_noise: dict, save_path: Path, param_names: list = PARAM_NAMES,
-                              n_voxels: int = N_VOXELS, n_repeats: int = N_NOISE_REPEATS) -> None:
+                              n_voxels: int = N_VOXELS, n_repeats: int = N_NOISE_REPEATS,
+                              design_label: Optional[str] = None) -> None:
     """Bar chart of the post-hoc accuracy statistic: one group per parameter,
     one bar per noise level, height = Pearson r between true values and
     per-voxel mean recovered values across all independent voxels (Fig. 4E
@@ -363,8 +366,8 @@ def plot_accuracy_comparison(accuracy_by_noise: dict, save_path: Path, param_nam
     ax.set_ylim(-1.05, 1.05)
     ax.axhline(0, color="black", linewidth=0.8, zorder=0)
     ax.legend(title="noise level")
-    ax.set_title(f"Recovery accuracy across noise levels (N={n_voxels} voxels, "
-                 f"{n_repeats:,} MC repeats each)")
+    ax.set_title(titled(f"Recovery accuracy across noise levels (N={n_voxels} voxels, "
+                        f"{n_repeats:,} MC repeats each)", design_label))
 
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")

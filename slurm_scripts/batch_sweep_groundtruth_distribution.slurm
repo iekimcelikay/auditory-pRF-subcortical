@@ -18,17 +18,17 @@
 #   groundtruth_distribution_<noise>.npy   (n_voxels, n_repeats, 24 runs, 408 TRs) float32
 # and its mean over the repeats, the new ground truth (written last, so it marks a complete level)
 #   groundtruth_mean_<noise>.npz
-# into sweep_groundtruth_results/<timestamp>_groundtruth_24runs/.
+# into sweep_groundtruth_results/$DESIGN/<timestamp>_groundtruth_24runs/.
 #
 # Disk: 3.9 GB per noise level for the full run (100 voxels x 1000 repeats), about 12 GB for all three.
 #
 # Needs, on this machine:
-#   models_output/sweep_design_erb_3band/combined/        the 25 combined cochlear results
-#   sweep_recovery_multirun_grids/run_grid_design1000.npz  (only its candidate parameters are read,
+#   models_output/$DESIGN/combined/        the 25 combined cochlear results
+#   sweep_recovery_multirun_grids/$DESIGN/run_grid_design1000.npz  (only its candidate parameters are read,
 #                                                           to draw the same 100 on-grid voxels as before)
 #
 # Environment variables:
-#   NOISE="low mid high" (default)   N_VOXELS=100   N_REPEATS=1000   GRID_DIR=sweep_recovery_multirun_grids
+#   NOISE="low mid high" (default)   N_VOXELS=100   N_REPEATS=1000   DESIGN=sweep_design_erb3band
 # NOISE_MODEL=additive|legacy (default additive): MATLAB-style noise added as is to the signal scaled by ONE
 # global best-case constant (see auditory-prf-docs-all/additive_noise_design.md). 'legacy' = the earlier
 # per-voxel scaling. All results made before the additive noise used 'legacy' and have to be re-run.
@@ -41,11 +41,11 @@
 #
 # --time=01:00:00 is only a ceiling; measure in the smoke run, then check `seff <jobid>` and adjust.
 
+DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
 NOISE=${NOISE:-"low mid high"}
 NOISE_MODEL=${NOISE_MODEL:-additive}
 N_VOXELS=${N_VOXELS:-100}
 N_REPEATS=${N_REPEATS:-1000}
-GRID_DIR=${GRID_DIR:-sweep_recovery_multirun_grids}
 
 # Print job information
 echo "==================================="
@@ -53,7 +53,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "noise=$NOISE noise_model=$NOISE_MODEL n_voxels=$N_VOXELS n_repeats=$N_REPEATS grid_dir=$GRID_DIR"
+echo "noise=$NOISE noise_model=$NOISE_MODEL n_voxels=$N_VOXELS n_repeats=$N_REPEATS design=$DESIGN"
 echo "==================================="
 
 module load Miniforge3
@@ -65,9 +65,7 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_groundtruth_distribution \
-    --results-dir models_output/sweep_design_erb_3band/combined \
-    --grid-dir "$GRID_DIR" \
-    --output-dir sweep_groundtruth_results \
+    --design $DESIGN \
     --noise $NOISE \
     --noise-model $NOISE_MODEL \
     --n-voxels $N_VOXELS \

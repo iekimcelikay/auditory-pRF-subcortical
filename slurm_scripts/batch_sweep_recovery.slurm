@@ -32,9 +32,12 @@
 # locally); check `seff <jobid>` and adjust. Noisy runs (10,000 repeats x 100 voxels) need a
 # longer --time; measure the noise-free run first.
 #
-# Needs the 25 combined results on this machine:
-#   models_output/sweep_design_erb_3band/combined/   (24 sweeps + silence_20s)
+# DESIGN (environment variable, default sweep_design_erb3band) picks the sweep design; everything of a design lives
+# under its name (stimuli/sweep_design_names.py): models_output/<DESIGN>/combined, sweep_recovery_multirun_grids/<DESIGN>,
+# sweep_recovery_results/<DESIGN>, sweep_groundtruth_results/<DESIGN>. e.g.  DESIGN=harmonic_sweep_armA sbatch <this script>
+# Needs the 25 combined results of the design on this machine: models_output/$DESIGN/combined/ (24 trials + silence_20s)
 
+DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
 NOISE=${NOISE:-none}
 NOISE_MODEL=${NOISE_MODEL:-additive}
 GT_MODE=${GT_MODE:-on_grid}
@@ -52,7 +55,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "noise=$NOISE noise_model=$NOISE_MODEL gt_mode=$GT_MODE n_voxels=$N_VOXELS design_seed=$DESIGN_SEED $REPEATS_ARG"
+echo "design=$DESIGN noise=$NOISE noise_model=$NOISE_MODEL gt_mode=$GT_MODE n_voxels=$N_VOXELS design_seed=$DESIGN_SEED $REPEATS_ARG"
 echo "==================================="
 
 module load Miniforge3
@@ -63,8 +66,7 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_recovery \
-    --results-dir models_output/sweep_design_erb_3band/combined \
-    --output-dir sweep_recovery_results \
+    --design $DESIGN \
     --noise $NOISE --noise-model $NOISE_MODEL --gt-mode $GT_MODE --n-voxels $N_VOXELS \
     --design-seed $DESIGN_SEED $REPEATS_ARG
 PYTHON_STATUS=$?

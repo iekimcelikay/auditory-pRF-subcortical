@@ -42,7 +42,8 @@ from auditory_prf.prf_pipeline.solver.match_details import (  # noqa: F401  (re-
     match_details_fixed_effects,
 )
 from auditory_prf.prf_pipeline.solver.parallel_recovery import map_voxels
-from auditory_prf.prf_pipeline.solver.sweep_highpass_drift_test import DEFAULT_CUTOFFS_S, highpass_projection
+from auditory_prf.prf_pipeline.solver.highpass import highpass_projection, highpass_template_per_run
+from auditory_prf.prf_pipeline.solver.sweep_highpass_drift_test import DEFAULT_CUTOFFS_S
 from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     PARAM_NAMES,
     plot_recovered_level_distribution,
@@ -51,9 +52,6 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     summarize,
 )
 from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
-    DEFAULT_GRID_DIR,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_RESULTS_DIR,
     ESTIMATES,
     METHOD_COLORS,
     METHOD_LABELS,
@@ -63,11 +61,13 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
     load_run_grids,
     normalize_run_templates,
 )
+from auditory_prf.visualization.design_label import titled
 from prf_models.pm_noise import PmAdapter, PmNoise
+from stimuli import sweep_design_names as design_names
 
 logger = logging.getLogger(__name__)
 
-NOISE_SCALES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
+NOISE_SCALES =[0.0, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
 NOISE_JITTER_SWEEP = [0.1, 0.1, 0.1]            # same jitter as the averaged-ground-truth experiment
 N_REPEATS_SWEEP = 200
 N_VOXELS = 100
@@ -118,23 +118,6 @@ def clean_signals_from_grids(candidate_params: np.ndarray, template_per_run: lis
         rows.append(match[0])
     return np.stack([np.stack([templates[row].astype(np.float64) for templates in template_per_run])
                      for row in rows])
-
-
-def highpass_template_per_run(template_per_run: list, projection: np.ndarray) -> list:
-    """High-pass every run's templates with the same projection; the amplitudes are kept.
-
-    Parameters
-    ----------
-    template_per_run : list of np.ndarray, each (n_candidates, n_tr)
-    projection : np.ndarray, shape (n_tr, n_tr)
-        ``sweep_highpass_drift_test.highpass_projection``; it also removes the mean.
-
-    Returns
-    -------
-    list of np.ndarray float32, each (n_candidates, n_tr); pass it to ``normalize_run_templates`` like the
-    unfiltered templates.
-    """
-    return [(templates.astype(np.float64) @ projection).astype(np.float32) for templates in template_per_run]
 
 
 # ── Recovery ──────────────────────────────────────────────────────────────────
@@ -314,7 +297,8 @@ FILTER_LINESTYLES = ["-", "--", ":", "-."]
 
 
 def plot_tau_summary(rows: list, noise_scales: Sequence[float], n_levels: int, best_constant: float,
-                     save_path: Path, preset: str, n_voxels: int, n_repeats: int) -> None:
+                     save_path: Path, preset: str, n_voxels: int, n_repeats: int,
+                     design_label: Optional[str] = None) -> None:
     """Three panels against the noise scale (evenly spaced, 0 on the left): exact share, correlation, relative MSE.
 
     One line per method (colour) and filter (line style: solid = no filter).
@@ -344,8 +328,8 @@ def plot_tau_summary(rows: list, noise_scales: Sequence[float], n_levels: int, b
         ax.set_title(title, fontsize=10)
     axes[2].set_yscale("symlog", linthresh=0.1)
     axes[0].legend(frameon=False, fontsize=6.5)
-    fig.suptitle(f"Tau recovery against the noise level: clean ground truth, {n_voxels} voxels, "
-                 f"{n_repeats} repeats, 24 runs", fontsize=11)
+    fig.suptitle(titled(f"Tau recovery against the noise level: clean ground truth, {n_voxels} voxels, "
+                        f"{n_repeats} repeats, 24 runs", design_label), fontsize=11)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
@@ -354,7 +338,8 @@ def plot_tau_summary(rows: list, noise_scales: Sequence[float], n_levels: int, b
 # ── Report and command line ───────────────────────────────────────────────────
 def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray, candidate_params: np.ndarray,
                        cf_list_hz: np.ndarray, run_dir: Path, timestamp: str, preset: str, n_repeats: int,
-                       white_sd_percent: dict, total_sd_percent: dict) -> list:
+                       white_sd_percent: dict, total_sd_percent: dict, design_name: Optional[str] = None,
+                       design_label: Optional[str] = None) -> list:
     """Tables, result files and heatmaps of one filter ("none" keeps the original file names); returns the summary rows."""
     infix = "" if filter_name == "none" else f"{filter_name}_"
     suffix = "" if filter_name == "none" else f"_{filter_name}"
@@ -387,12 +372,14 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
             n_ties=result["n_ties"], noise_scale=k, preset=preset, jitter=np.asarray(NOISE_JITTER_SWEEP),
             param_names=PARAM_NAMES, signal_scale=SIGNAL_SCALE, white_sd_percent=white_sd_percent[k],
             total_sd_percent=total_sd_percent[k], filter=filter_name, candidate_params=candidate_params,
+            design=design_name or "", design_label=design_label or "",
             **level_values, **{key: value for key, value in result.items()
                                if key.startswith("match_") or key == "full_scores_fixed_effects"})
     for method, recovered_by_label in recovered_by_method.items():
         plot_recovered_level_distribution(
             true_params, recovered_by_label, candidate_params,
-            run_dir / f"recovered_tau_distribution_{method}{suffix}.png", param_name="tau_ms", n_repeats=n_repeats)
+            run_dir / f"recovered_tau_distribution_{method}{suffix}.png", param_name="tau_ms", n_repeats=n_repeats,
+            design_label=design_label)
     return rows
 
 
@@ -411,8 +398,12 @@ def sweep_and_report(
     top_n: int = TOP_N_MATCHES,
     save_measurements: bool = False,
     full_score_repeats: int = 5,
+    design_name: str = design_names.DEFAULT_DESIGN_NAME,
 ) -> Path:
     """Run the sweep and write the tables, plots and result files.
+
+    ``design_name`` (stimuli/sweep_design_names.py) supplies the sampling interval (TR) when ``tr_s`` is None; the
+    design's name and label are stored in every result file and the label is shown in the plot titles.
 
     Every noise draw is matched without a filter and once per high-pass cutoff (identical seeds, so the
     differences are due to the filter). Files of the unfiltered recovery keep their names; the others get the
@@ -435,9 +426,10 @@ def sweep_and_report(
     -------
     Path of the result folder ``<output_dir>/<timestamp>_noise_scale_<preset>_<n>runs``.
     """
+    design_label = design_names.design_label(design_name)
     if tr_s is None:
-        import stimuli.sweep_design_erb as design      # needs the project root on sys.path
-        tr_s = design.TR_S
+        from stimuli.sweep_designs import get_design      # needs the project root on sys.path
+        tr_s = get_design(design_name).TR_S
     timestamp = f"{datetime.now():%Y%m%d_%H%M%S}"
     run_dir = Path(output_dir) / f"{timestamp}_noise_scale_{preset}_{len(design_seeds)}runs"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -465,11 +457,13 @@ def sweep_and_report(
                 np.save(run_dir / f"measurements_k{k:g}_{timestamp}.npy", result["measurements"])
                 result["measurements"] = None
         rows += _report_one_filter(filter_name, results, true_params, candidate_params, cf_list_hz, run_dir,
-                                   timestamp, preset, n_repeats, white_sd_percent, total_sd_percent)
+                                   timestamp, preset, n_repeats, white_sd_percent, total_sd_percent,
+                                   design_name=design_name, design_label=design_label)
     save_tau_summary_table(rows, run_dir / "tau_summary_by_noise_scale.csv")
     plot_tau_summary(rows, list(white_sd_percent), len(np.unique(candidate_params[:, TAU_INDEX])),
                      best_constant_relative_mse(true_params[:, TAU_INDEX]),
-                     run_dir / "tau_summary_by_noise_scale.png", preset, n_voxels, n_repeats)
+                     run_dir / "tau_summary_by_noise_scale.png", preset, n_voxels, n_repeats,
+                     design_label=design_label)
     logger.info("done -> %s", run_dir.resolve())
     return run_dir
 
@@ -477,9 +471,13 @@ def sweep_and_report(
 def _build_parser() -> argparse.ArgumentParser:
     n_workers_default = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR, help="only used for the CF list")
-    parser.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--design", choices=design_names.DESIGN_NAMES, default=design_names.DEFAULT_DESIGN_NAME,
+                        help="Sweep design (stimuli/sweep_design_names.py): picks the default folders and the label "
+                             "shown in the plots; the grids must be of this design.")
+    parser.add_argument("--results-dir", default=None,
+                        help="only used for the CF list. Default: models_output/<design>/combined.")
+    parser.add_argument("--grid-dir", default=None, help="Default: sweep_recovery_multirun_grids/<design>.")
+    parser.add_argument("--output-dir", default=None, help="Default: sweep_recovery_results/<design>.")
     parser.add_argument("--preset", choices=["low", "mid", "high"], default="low",
                         help="the noise preset that the scale k multiplies")
     parser.add_argument("--noise-scales", type=float, nargs="+", default=list(NOISE_SCALES),
@@ -503,12 +501,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> None:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    _, cf_list_hz = load_raw_psths(Path(args.results_dir))
-    sweep_and_report(Path(args.grid_dir), Path(args.output_dir), cf_list_hz, args.preset,
+    _, cf_list_hz = load_raw_psths(Path(args.results_dir or design_names.combined_dir(args.design)))
+    sweep_and_report(Path(args.grid_dir or design_names.grid_dir(args.design)),
+                     Path(args.output_dir or design_names.results_dir(args.design)), cf_list_hz, args.preset,
                      list(dict.fromkeys(args.noise_scales)), args.n_voxels, args.n_repeats,
                      args.design_seeds, args.n_workers, highpass_cutoffs_s=args.highpass_cutoffs,
                      top_n=args.top_n, save_measurements=args.save_measurements,
-                     full_score_repeats=args.full_score_repeats)
+                     full_score_repeats=args.full_score_repeats, design_name=args.design)
 
 
 if __name__ == "__main__":

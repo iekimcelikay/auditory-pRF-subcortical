@@ -29,7 +29,9 @@
 #       --expected-n-batches 6
 #
 # Usage: sbatch slurm_scripts/batch_cochlea_sweep_cfbatch.slurm
-#   (WAV_DIR defaults to stimuli/produced/sweep_design_erb_3band; override with WAV_DIR=...)
+#   DESIGN=harmonic_sweep_armA sbatch slurm_scripts/batch_cochlea_sweep_cfbatch.slurm
+#   WAV_DIR defaults to stimuli/produced/$DESIGN (the folder is named like the design, stimuli/sweep_design_names.py);
+#   the results go to models_output/$DESIGN. Override the folder with WAV_DIR=...
 
 N_WAV=25
 N_CF=30
@@ -58,8 +60,9 @@ module load Miniforge3
 
 # ---- Environment Setup --
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
-# Folder holding the 24 sweep WAVs (copy sweep_design_erb_3band/ from the local machine here)
-WAV_DIR=${WAV_DIR:-$AUDITORY_PRF_ROOT/stimuli/produced/sweep_design_erb_3band}
+# Folder holding the 24 trials + silence_20s.wav of the design (copy it from the local machine here)
+DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
+WAV_DIR=${WAV_DIR:-$AUDITORY_PRF_ROOT/stimuli/produced/$DESIGN}
 
 cd $AUDITORY_PRF_ROOT
 # Shared parent of all tasks' output folders; mkdir -p is safe when tasks start together

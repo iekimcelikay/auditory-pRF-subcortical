@@ -26,6 +26,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 from auditory_prf.prf_pipeline.solver.grid_recovery import MC_SEED
+from auditory_prf.prf_pipeline.solver.highpass import highpass_projection, n_highpass_columns  # noqa: F401  (re-exported)
 from auditory_prf.prf_pipeline.solver.parallel_recovery import best_match_indices, map_voxels
 from auditory_prf.prf_pipeline.solver.sweep_groundtruth_distribution import NOISE_JITTER_GROUNDTRUTH
 from auditory_prf.prf_pipeline.solver.sweep_recovery import PARAM_NAMES, sample_ground_truths
@@ -35,45 +36,18 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery_from_groundtruth import (
     recovery_signal_scale,
 )
 from auditory_prf.prf_pipeline.solver.sweep_recovery_multirun import (
-    DEFAULT_GRID_DIR,
-    DEFAULT_OUTPUT_DIR,
     RUN_DESIGN_SEEDS,
     load_run_grids,
     normalize_run_templates,
 )
+from stimuli import sweep_design_names as design_names
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CUTOFFS_S = [128.0, 64.0]
 
 
-# ── High-pass filter ──────────────────────────────────────────────────────────
-def n_highpass_columns(n_tr: int, tr_s: float, cutoff_s: float) -> int:
-    """Number of DCT drift columns (the constant included) with a period longer than ``cutoff_s``.
-
-    SPM convention: ``floor(2 * n_tr * tr_s / cutoff_s) + 1``.
-    """
-    return int(np.floor(2.0 * n_tr * tr_s / cutoff_s)) + 1
-
-
-def highpass_projection(n_tr: int, tr_s: float, cutoff_s: float) -> np.ndarray:
-    """Matrix P that removes the slow DCT components of a time course of length ``n_tr``.
-
-    ``P = I - B B^T`` with B the orthonormal DCT-II columns 0 .. K-1 (K = ``n_highpass_columns``); column 0
-    is the constant, so P also removes the mean. P is symmetric and idempotent.
-
-    Returns
-    -------
-    np.ndarray float64, shape (n_tr, n_tr)
-    """
-    n_columns = n_highpass_columns(n_tr, tr_s, cutoff_s)
-    i = np.arange(n_tr)[:, None]
-    k = np.arange(n_columns)[None, :]
-    basis = np.sqrt(2.0 / n_tr) * np.cos(np.pi * (2 * i + 1) * k / (2 * n_tr))
-    basis[:, 0] = 1.0 / np.sqrt(n_tr)
-    return np.eye(n_tr) - basis @ basis.T
-
-
+# ── High-pass filter (projection and helpers live in highpass.py) ─────────────
 def highpass_templates(template_per_run: list, projection: np.ndarray) -> list:
     """High-pass every run's templates with the same projection, then unit-normalise each row.
 
@@ -169,8 +143,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--groundtruth-dir", required=True,
                         help="folder written by sweep_groundtruth_distribution.py (groundtruth_mean_<noise>.npz)")
-    parser.add_argument("--grid-dir", default=DEFAULT_GRID_DIR)
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--design", choices=design_names.DESIGN_NAMES, default=design_names.DEFAULT_DESIGN_NAME,
+                        help="Sweep design (stimuli/sweep_design_names.py): picks the default folders and the label "
+                             "stored in the result file; the grids and the ground truth must be of this design.")
+    parser.add_argument("--grid-dir", default=None, help="Default: sweep_recovery_multirun_grids/<design>.")
+    parser.add_argument("--output-dir", default=None, help="Default: sweep_recovery_results/<design>.")
     parser.add_argument("--noise", choices=["low", "mid", "high"], default="mid")
     parser.add_argument("--n-repeats", type=int, default=200)
     parser.add_argument("--cutoffs", type=float, nargs="+", default=list(DEFAULT_CUTOFFS_S),
@@ -186,16 +163,19 @@ def main(argv: Optional[list] = None) -> None:
     groundtruth = load_groundtruth(Path(args.groundtruth_dir), args.noise)
     assert groundtruth["design_seeds"] == list(args.design_seeds), (
         f"ground truth built for run orders {groundtruth['design_seeds']}, not {list(args.design_seeds)}")
-    candidate_params, template_per_run = load_run_grids(Path(args.grid_dir), args.design_seeds)
+    candidate_params, template_per_run = load_run_grids(
+        Path(args.grid_dir or design_names.grid_dir(args.design)), args.design_seeds)
     true_params = groundtruth["true_params"]
     expected = sample_ground_truths("on_grid", np.random.default_rng(MC_SEED), len(groundtruth["cf_list_hz"]),
                                     candidate_params, len(true_params))
     assert np.array_equal(true_params, expected), "the ground-truth voxels are not the MC_SEED on-grid draw"
-    run_dir = Path(args.output_dir) / f"{datetime.now():%Y%m%d_%H%M%S}_highpass_test_averaged_gt_{args.noise}"
+    output_dir = Path(args.output_dir or design_names.results_dir(args.design))
+    run_dir = output_dir / f"{datetime.now():%Y%m%d_%H%M%S}_highpass_test_averaged_gt_{args.noise}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("averaged ground truth of '%s' (%s model) voxels=%d repeats=%d runs=%d cutoffs=%s jitter=%s "
-                "workers=%d -> %s", args.noise, groundtruth["noise_model"], len(true_params), args.n_repeats,
-                len(args.design_seeds), args.cutoffs, groundtruth["jitter"], args.n_workers, run_dir)
+    logger.info("design=%s (%s) averaged ground truth of '%s' (%s model) voxels=%d repeats=%d runs=%d cutoffs=%s "
+                "jitter=%s workers=%d -> %s", args.design, design_names.design_label(args.design), args.noise,
+                groundtruth["noise_model"], len(true_params), args.n_repeats, len(args.design_seeds), args.cutoffs,
+                groundtruth["jitter"], args.n_workers, run_dir)
     result = run_highpass_test(
         groundtruth["groundtruth_bold"], candidate_params, template_per_run, true_params, args.noise,
         args.n_repeats, args.cutoffs, groundtruth["tr_s"], args.n_workers, groundtruth["jitter"],
@@ -204,6 +184,7 @@ def main(argv: Optional[list] = None) -> None:
              cutoffs_s=np.asarray(args.cutoffs), noise=args.noise, n_repeats=args.n_repeats,
              jitter=np.asarray(groundtruth["jitter"]), noise_model=groundtruth["noise_model"],
              groundtruth="averaged", param_names=np.asarray(PARAM_NAMES),
+             design=args.design, design_label=design_names.design_label(args.design),
              **{f"recovered_{k}": v for k, v in result.items()})
     logger.info("done -> %s", run_dir.resolve())
 

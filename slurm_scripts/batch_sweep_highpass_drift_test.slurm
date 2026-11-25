@@ -18,15 +18,15 @@
 # same noisy measurement: as before ("none") and after removing the slow DCT components (period longer than the
 # cutoff) from BOTH the measurement and every template ("hp128", "hp64"). The question: does the fixed drift
 # of the noise model cause the run-specific favourite tau? Single-run estimates of all 24 run orders. Writes
-#   sweep_recovery_results/<timestamp>_highpass_test_averaged_gt_<noise>/highpass_test_<noise>.npz
+#   sweep_recovery_results/$DESIGN/<timestamp>_highpass_test_averaged_gt_<noise>/highpass_test_<noise>.npz
 #
 # Needs, on this machine:
 #   GROUNDTRUTH_DIR   folder written by batch_sweep_groundtruth_distribution.slurm, with groundtruth_mean_<noise>.npz
-#   sweep_recovery_multirun_grids/run_grid_design1000..1023.npz   from batch_sweep_grid_multirun.slurm
+#   sweep_recovery_multirun_grids/$DESIGN/run_grid_design1000..1023.npz   from batch_sweep_grid_multirun.slurm
 #   (no cochlear results and no forward model: the signal comes from the averaged ground truth)
 #
 # Environment variables (GROUNDTRUTH_DIR is required):
-#   GROUNDTRUTH_DIR=<folder>   NOISE=mid (default)   N_REPEATS=200   CUTOFFS="128 64"   GRID_DIR=sweep_recovery_multirun_grids
+#   GROUNDTRUTH_DIR=<folder>   NOISE=mid (default)   N_REPEATS=200   CUTOFFS="128 64"   DESIGN=sweep_design_erb3band
 # Smoke run first (5 repeats):
 #   GROUNDTRUTH_DIR=<folder> N_REPEATS=5 sbatch --cpus-per-task=4 --mem=16G --time=00:15:00 slurm_scripts/batch_sweep_highpass_drift_test.slurm
 # Full run:
@@ -34,10 +34,10 @@
 #
 # --time=00:30:00 is only a ceiling; check `seff <jobid>` and adjust.
 
+DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
 NOISE=${NOISE:-mid}
 N_REPEATS=${N_REPEATS:-200}
 CUTOFFS=${CUTOFFS:-"128 64"}
-GRID_DIR=${GRID_DIR:-sweep_recovery_multirun_grids}
 if [ -z "$GROUNDTRUTH_DIR" ]; then
     echo "GROUNDTRUTH_DIR is not set (folder with groundtruth_mean_<noise>.npz from the distribution job)" >&2
     exit 2
@@ -49,7 +49,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "noise=$NOISE n_repeats=$N_REPEATS cutoffs=$CUTOFFS groundtruth=$GROUNDTRUTH_DIR grid_dir=$GRID_DIR"
+echo "noise=$NOISE n_repeats=$N_REPEATS cutoffs=$CUTOFFS groundtruth=$GROUNDTRUTH_DIR design=$DESIGN"
 echo "==================================="
 
 module load Miniforge3
@@ -62,8 +62,7 @@ export MKL_NUM_THREADS=1
 
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_highpass_drift_test \
     --groundtruth-dir "$GROUNDTRUTH_DIR" \
-    --grid-dir "$GRID_DIR" \
-    --output-dir sweep_recovery_results \
+    --design $DESIGN \
     --noise $NOISE \
     --n-repeats $N_REPEATS \
     --cutoffs $CUTOFFS \

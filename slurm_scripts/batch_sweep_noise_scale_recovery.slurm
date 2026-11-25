@@ -25,14 +25,14 @@
 # carry hp<cutoff>. Saved for every matching: the 10 best candidates with their Pearson r and the best r at every
 # CF, alpha, tau and w level (match_* arrays in the npz files), and with SAVE_MEASUREMENTS=1 the noisy
 # measurements (measurements_k<k>_*.npy, about 0.8 GB per level) so that any later analysis can be done locally.
-# Writes sweep_recovery_results/<timestamp>_noise_scale_<preset>_24runs/
+# Writes sweep_recovery_results/$DESIGN/<timestamp>_noise_scale_<preset>_24runs/
 #
 # Needs, on this machine:
-#   sweep_recovery_multirun_grids/run_grid_design1000..1023.npz   from batch_sweep_grid_multirun.slurm
-#   models_output/sweep_design_erb_3band/combined                 (only for the CF list)
+#   sweep_recovery_multirun_grids/$DESIGN/run_grid_design1000..1023.npz   from batch_sweep_grid_multirun.slurm
+#   models_output/$DESIGN/combined                 (only for the CF list)
 #
 # Environment variables (all optional):
-#   PRESET=low   NOISE_SCALES="0 0.01 0.03 0.1 0.3 1 3"   N_REPEATS=200   GRID_DIR=sweep_recovery_multirun_grids
+#   PRESET=low   NOISE_SCALES="0 0.01 0.03 0.1 0.3 1 3"   N_REPEATS=200   DESIGN=sweep_design_erb3band
 #   HIGHPASS_CUTOFFS="128 64" (empty string = no filter)   SAVE_MEASUREMENTS=1 (0 = do not save them)
 # Smoke run first (2 voxels' worth of time: 5 repeats, 3 levels):
 #   NOISE_SCALES="0 0.3 3" N_REPEATS=5 sbatch --cpus-per-task=8 --mem=8G --time=00:15:00 slurm_scripts/batch_sweep_noise_scale_recovery.slurm
@@ -41,10 +41,10 @@
 #
 # --time=04:00:00 is only a ceiling (the filters triple the matching work); check `seff <jobid>` and adjust.
 
+DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
 PRESET=${PRESET:-low}
 NOISE_SCALES=${NOISE_SCALES:-"0 0.01 0.03 0.1 0.3 1 3"}
 N_REPEATS=${N_REPEATS:-200}
-GRID_DIR=${GRID_DIR:-sweep_recovery_multirun_grids}
 HIGHPASS_CUTOFFS=${HIGHPASS_CUTOFFS-"128 64"}
 SAVE_MEASUREMENTS=${SAVE_MEASUREMENTS:-1}
 SAVE_FLAG=""
@@ -56,7 +56,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "preset=$PRESET noise_scales=$NOISE_SCALES n_repeats=$N_REPEATS grid_dir=$GRID_DIR highpass=[$HIGHPASS_CUTOFFS] save_measurements=$SAVE_MEASUREMENTS"
+echo "preset=$PRESET noise_scales=$NOISE_SCALES n_repeats=$N_REPEATS design=$DESIGN highpass=[$HIGHPASS_CUTOFFS] save_measurements=$SAVE_MEASUREMENTS"
 echo "==================================="
 
 module load Miniforge3
@@ -68,8 +68,7 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_noise_scale_recovery \
-    --grid-dir "$GRID_DIR" \
-    --output-dir sweep_recovery_results \
+    --design $DESIGN \
     --preset $PRESET \
     --noise-scales $NOISE_SCALES \
     --n-repeats $N_REPEATS \

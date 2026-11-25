@@ -1,9 +1,11 @@
-"""Cochleagrams of the tone/ISI sweep set (family P2), saved as PNGs; safe on a cluster without a display.
+"""Cochleagrams of a harmonic-sweep design (harmonic_sweep_armA / harmonic_sweep_armB), saved as PNGs; safe on a cluster
+without a display.
 
-Input: the combined cochlea outputs of examples/combine_cf_batches.py, i.e. models_output/<wav folder name>/combined/
-*.npz; --run-dir may be the <wav folder name> folder or the combined/ folder itself (keys: soundfileid, metadata, cf_list (n_cf,) Hz, time_axis (n_bins,) s, population_rate_psth (n_cf, n_bins)).
+Input: the combined cochlea outputs of examples/combine_cf_batches.py, i.e. models_output/<design name>/combined/*.npz
+(keys: soundfileid, metadata, cf_list (n_cf,) Hz, time_axis (n_bins,) s, population_rate_psth (n_cf, n_bins)). The design
+name (--design) also gives the label shown in every title, e.g. 'Harmonic sweeps: 3 rates x 2 tones x 4 ISIs'.
 
-Output (default <run-dir>/cochleagrams/):
+Output (default models_output/<design name>/cochleagrams/):
   - one PNG per trial: CF x time image of the first --window-s seconds, grey bands = ISIs
   - overview_all.png: all trials of the set, rate across the columns, tone x ISI down the rows, one shared colour scale
   - mean_rate_per_cf.png: mean rate per CF during the tones (trial mean / duty cycle), one line per sweep rate,
@@ -13,12 +15,14 @@ Output (default <run-dir>/cochleagrams/):
 
 Usage (from the project root)
 -----------------------------
-    python examples/plot_sweep_silence_cochleagrams.py --run-dir models_output/sweeps_silence_P2_armA_harmonic_cal60_20261125
-    python examples/plot_sweep_silence_cochleagrams.py --run-dir <dir> --window-s 0.7 --smooth-ms 3
+    python examples/plot_harmonic_sweep_cochleagrams.py --design harmonic_sweep_armA
+    python examples/plot_harmonic_sweep_cochleagrams.py --design harmonic_sweep_armB --window-s 0.7 --smooth-ms 3
+    python examples/plot_harmonic_sweep_cochleagrams.py --design harmonic_sweep_armA --run-dir <other folder>  # override
 """
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +32,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import FixedLocator, FuncFormatter
 
-UNIT_S = 20.0 / 120.0               # tone lengths are k x T, ISIs are j x T/2 (family P2)
+sys.path.insert(0, str(Path(__file__).parent.parent))      # so that `stimuli` is importable from examples/
+
+from stimuli.sweep_design_names import DESIGN_NAMES, HARMONIC_DESIGN_PREFIX, cochlea_dir, design_label
+
+HARMONIC_DESIGNS = tuple(name for name in DESIGN_NAMES if name.startswith(HARMONIC_DESIGN_PREFIX))
+UNIT_S = 20.0 / 120.0              # tone lengths are k x T, ISIs are j x T/2 (family P2)
 HALF_UNIT_S = UNIT_S / 2.0
 COLORMAP = "Blues"
 RATE_COLORS = ("#9ecae1", "#3182bd", "#08306b")         # light -> dark = slow -> fast (single-hue ramp)
@@ -120,11 +129,16 @@ def condition_label(metadata: dict) -> str:
     return (f"{metadata['rate_hz']:g} Hz | tone {metadata['tone_ms']:g} ms | ISI {metadata['isi_ms']:g} ms")
 
 
-def plot_single(result: dict, out_path: Path, window_s: float, smooth_ms: float, vmax: float) -> None:
-    fig, ax = plt.subplots(figsize=(8, 3.6), constrained_layout=True)
+def _with_label(title: str, label: Optional[str]) -> str:
+    """The design label on the first line, the plot's own title below it."""
+    return title if not label else f"{label}\n{title}"
+
+
+def plot_single(result: dict, out_path: Path, window_s: float, smooth_ms: float, vmax: float,
+                label: Optional[str] = None) -> None:
+    fig, ax = plt.subplots(figsize=(8, 3.8), constrained_layout=True)
     mesh = draw_cochleagram(ax, result, window_s, smooth_ms, vmax)
-    ax.set_title(f"{result['metadata'].get('arm', '')} {result['metadata'].get('carrier', '')} | "
-                 f"{condition_label(result['metadata'])}", loc="left", fontsize=10)
+    ax.set_title(_with_label(condition_label(result["metadata"]), label), loc="left", fontsize=10)
     ax.set_xlabel("Time (s)  [grey = ISI]")
     ax.set_ylabel("CF (Hz)")
     fig.colorbar(mesh, ax=ax, label="population rate (spikes/s)", pad=0.01)
@@ -138,7 +152,8 @@ def _grid_axes(results: list) -> tuple:
     return rates, cells
 
 
-def plot_overview(results: list, out_path: Path, window_s: float, smooth_ms: float, vmax: float) -> None:
+def plot_overview(results: list, out_path: Path, window_s: float, smooth_ms: float, vmax: float,
+                  label: Optional[str] = None) -> None:
     rates, cells = _grid_axes(results)
     fig, axes = plt.subplots(len(cells), len(rates), figsize=(4.3 * len(rates), 2.0 * len(cells) + 1.2),
                              sharex=True, sharey=True, squeeze=False, constrained_layout=True)
@@ -157,12 +172,12 @@ def plot_overview(results: list, out_path: Path, window_s: float, smooth_ms: flo
         axes[row, 0].set_ylabel("CF (Hz)", fontsize=8)
     assert mesh is not None, "no trials to plot"
     fig.colorbar(mesh, ax=axes, label="population rate (spikes/s), one scale for all panels", shrink=0.4, pad=0.01)
-    fig.suptitle(f"Cochleagrams, first {window_s:g} s of each trial (grey = ISI)", fontsize=12)
+    fig.suptitle(_with_label(f"Cochleagrams, first {window_s:g} s of each trial (grey = ISI)", label), fontsize=12)
     fig.savefig(out_path, dpi=110)
     plt.close(fig)
 
 
-def plot_mean_rate_per_cf(results: list, out_path: Path) -> None:
+def plot_mean_rate_per_cf(results: list, out_path: Path, label: Optional[str] = None) -> None:
     rates, cells = _grid_axes(results)
     tones = sorted({tone for tone, _ in cells})
     isis = sorted({isi for _, isi in cells})
@@ -187,7 +202,7 @@ def plot_mean_rate_per_cf(results: list, out_path: Path) -> None:
         axes[-1, col].set_xlabel("CF (Hz)")
     for row in range(len(tones)):
         axes[row, 0].set_ylabel("mean rate during tones (spikes/s)")
-    fig.suptitle("Drive per channel by sweep rate (trial mean / duty cycle)", fontsize=12)
+    fig.suptitle(_with_label("Drive per channel by sweep rate (trial mean / duty cycle)", label), fontsize=12)
     fig.savefig(out_path, dpi=110)
     plt.close(fig)
 
@@ -209,15 +224,18 @@ def write_summary_csv(results: list, out_path: Path) -> None:
 
 def main(argv: Optional[list] = None) -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
-    parser.add_argument("--run-dir", type=str, required=True,
-                        help="models_output/<wav folder name> (its combined/ is used), or the combined/ folder itself.")
+    parser.add_argument("--design", choices=HARMONIC_DESIGNS, default=HARMONIC_DESIGNS[0],
+                        help="Harmonic-sweep design: gives the default folder and the label shown in the titles.")
+    parser.add_argument("--run-dir", type=str, default=None,
+                        help="Override of models_output/<design> (its combined/ is used), or the combined/ folder itself.")
     parser.add_argument("--out-dir", type=str, default=None,
-                        help="Default: cochleagrams/ next to combined/ (i.e. <wav folder>/cochleagrams).")
+                        help="Default: cochleagrams/ next to combined/ (i.e. models_output/<design>/cochleagrams).")
     parser.add_argument("--window-s", type=float, default=1.5, help="Seconds of each trial shown (default 1.5).")
     parser.add_argument("--smooth-ms", type=float, default=2.0, help="Moving-average width along time (default 2 ms).")
     args = parser.parse_args(argv)
 
-    run_dir = Path(args.run_dir)
+    label = design_label(args.design)
+    run_dir = Path(args.run_dir or cochlea_dir(args.design))
     combined_dir = resolve_combined_dir(run_dir)
     out_dir = Path(args.out_dir) if args.out_dir else combined_dir.parent / "cochleagrams"
     files = find_combined_files(run_dir)
@@ -226,11 +244,11 @@ def main(argv: Optional[list] = None) -> None:
     results = [load_combined(path) for path in files]
     vmax = global_vmax(results, args.window_s, args.smooth_ms)
     for result in results:
-        plot_single(result, out_dir / f"{result['soundfileid']}.png", args.window_s, args.smooth_ms, vmax)
-    plot_overview(results, out_dir / "overview_all.png", args.window_s, args.smooth_ms, vmax)
-    plot_mean_rate_per_cf(results, out_dir / "mean_rate_per_cf.png")
+        plot_single(result, out_dir / f"{result['soundfileid']}.png", args.window_s, args.smooth_ms, vmax, label)
+    plot_overview(results, out_dir / "overview_all.png", args.window_s, args.smooth_ms, vmax, label)
+    plot_mean_rate_per_cf(results, out_dir / "mean_rate_per_cf.png", label)
     write_summary_csv(results, out_dir / "cochleagram_summary.csv")
-    print(f"{len(results)} trials -> {out_dir} (colour scale max {vmax:.0f} spikes/s)")
+    print(f"{args.design} ({label}): {len(results)} trials -> {out_dir} (colour scale max {vmax:.0f} spikes/s)")
 
 
 if __name__ == "__main__":
