@@ -44,6 +44,19 @@ SWEEP_NAME_PATTERN = re.compile(
 # Silent trial (stimuli/render_sweep_design_erb_wavs.py --silence): silence_20s.wav
 SILENCE_NAME_PATTERN = re.compile(r"^silence_(?P<duration_s>\d+)s")
 
+# Tone/ISI design (auditory-prf-docs-all/fm_sweep_silence_kim_design.md, family P2): full-band tones separated by
+# silences, 20 s trials made of identical [tone, ISI] blocks, e.g.
+#   armB_01_harm2500_rate6hz_dur167ms_isi167ms.wav   (harmonic carrier, 2500 Hz ceiling)
+#   armA_05_sine_rate12hz_dur167ms_isi83ms.wav       (sine carrier)
+# dur / isi are the name-rounded milliseconds (tone = 166.67 ms x k, ISI = 83.33 ms x j).
+TONE_ISI_NAME_PATTERN = re.compile(
+    r"^(?P<arm>arm[A-Z])_(?P<index>\d{2})_(?P<carrier>sine|harm(?P<max_harmonic_hz>\d+))"
+    r"_rate(?P<rate_hz>\d+(?:\.\d+)?)hz_dur(?P<tone_ms>\d+)ms_isi(?P<isi_ms>\d+)ms"
+)
+TONE_ISI_TRIAL_DURATION_S = 20.0
+TONE_ISI_LOWER_HZ = 125.0     # every tone sweeps the full band (f0 for the harmonic carrier)
+TONE_ISI_UPPER_HZ = 800.0
+
 
 def hz_to_erb_number(freq_hz: float) -> float:
     """ERB-number (Glasberg & Moore 1990)."""
@@ -56,8 +69,12 @@ def parse_sweep_filename(filename: str) -> dict:
     Parameters
     ----------
     filename : str
-        ERB-band name ``fmsweep_fc193.9hz_lo125.0hz_hi276.2hz_010cyc_0.50hz.wav`` or old
-        centered name ``fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav``.
+        ERB-band name ``fmsweep_fc193.9hz_lo125.0hz_hi276.2hz_010cyc_0.50hz.wav``, old
+        centered name ``fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav``, tone/ISI name
+        ``armB_01_harm2500_rate6hz_dur167ms_isi167ms.wav`` (keys: stimulus_type
+        "fm_sweep_tones", arm, condition_index, carrier, max_harmonic_hz, rate_hz, tone_ms,
+        isi_ms, lower_hz, upper_hz, width_oct, width_erb, trial_duration_s), or the silent
+        trial ``silence_20s.wav``.
 
     Returns
     -------
@@ -78,6 +95,24 @@ def parse_sweep_filename(filename: str) -> dict:
         return {"stimulus_type": "silence",
                 "trial_duration_s": float(silence_match.group("duration_s")),
                 "n_cycles": 0}
+    tone_isi_match = TONE_ISI_NAME_PATTERN.match(filename)
+    if tone_isi_match is not None:
+        is_harmonic = tone_isi_match.group("carrier") != "sine"
+        return {
+            "stimulus_type": "fm_sweep_tones",
+            "arm": tone_isi_match.group("arm"),
+            "condition_index": int(tone_isi_match.group("index")),
+            "carrier": "harmonic" if is_harmonic else "sine",
+            "max_harmonic_hz": float(tone_isi_match.group("max_harmonic_hz")) if is_harmonic else None,
+            "rate_hz": float(tone_isi_match.group("rate_hz")),
+            "tone_ms": float(tone_isi_match.group("tone_ms")),
+            "isi_ms": float(tone_isi_match.group("isi_ms")),
+            "lower_hz": TONE_ISI_LOWER_HZ,
+            "upper_hz": TONE_ISI_UPPER_HZ,
+            "width_oct": math.log2(TONE_ISI_UPPER_HZ / TONE_ISI_LOWER_HZ),
+            "width_erb": hz_to_erb_number(TONE_ISI_UPPER_HZ) - hz_to_erb_number(TONE_ISI_LOWER_HZ),
+            "trial_duration_s": TONE_ISI_TRIAL_DURATION_S,
+        }
     band_match = BAND_NAME_PATTERN.search(filename)
     if band_match is not None:
         n_cycles = int(band_match.group("n_cycles"))
