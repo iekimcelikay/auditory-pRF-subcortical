@@ -1,7 +1,7 @@
 """Cochleagrams of the tone/ISI sweep set (family P2), saved as PNGs; safe on a cluster without a display.
 
 Input: the combined cochlea outputs of examples/combine_cf_batches.py, i.e. models_output/<wav folder name>/combined/
-*.npz (keys: soundfileid, metadata, cf_list (n_cf,) Hz, time_axis (n_bins,) s, population_rate_psth (n_cf, n_bins)).
+*.npz; --run-dir may be the <wav folder name> folder or the combined/ folder itself (keys: soundfileid, metadata, cf_list (n_cf,) Hz, time_axis (n_bins,) s, population_rate_psth (n_cf, n_bins)).
 
 Output (default <run-dir>/cochleagrams/):
   - one PNG per trial: CF x time image of the first --window-s seconds, grey bands = ISIs
@@ -37,9 +37,14 @@ HIGH_CF_HZ = 1000.0
 FUNDAMENTAL_RANGE_HZ = (125.0, 800.0)
 
 
+def resolve_combined_dir(run_dir: Path) -> Path:
+    """The folder with the combined .npz files: <run_dir>/combined if it exists, else run_dir itself."""
+    return run_dir / "combined" if (run_dir / "combined").is_dir() else run_dir
+
+
 def find_combined_files(run_dir: Path) -> list:
     """Combined .npz files of the tone/ISI trials (silence excluded), sorted by name."""
-    return sorted(p for p in (run_dir / "combined").glob("*.npz") if "silence" not in p.name)
+    return sorted(p for p in resolve_combined_dir(run_dir).glob("*.npz") if "silence" not in p.name)
 
 
 def load_combined(npz_path: Path) -> dict:
@@ -150,6 +155,7 @@ def plot_overview(results: list, out_path: Path, window_s: float, smooth_ms: flo
         axes[-1, col].set_xlabel("Time (s)", fontsize=8)
     for row in range(len(cells)):
         axes[row, 0].set_ylabel("CF (Hz)", fontsize=8)
+    assert mesh is not None, "no trials to plot"
     fig.colorbar(mesh, ax=axes, label="population rate (spikes/s), one scale for all panels", shrink=0.4, pad=0.01)
     fig.suptitle(f"Cochleagrams, first {window_s:g} s of each trial (grey = ISI)", fontsize=12)
     fig.savefig(out_path, dpi=110)
@@ -202,18 +208,21 @@ def write_summary_csv(results: list, out_path: Path) -> None:
 
 
 def main(argv: Optional[list] = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--run-dir", type=str, required=True, help="models_output/<wav folder name> (has combined/).")
-    parser.add_argument("--out-dir", type=str, default=None, help="Default: <run-dir>/cochleagrams.")
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
+    parser.add_argument("--run-dir", type=str, required=True,
+                        help="models_output/<wav folder name> (its combined/ is used), or the combined/ folder itself.")
+    parser.add_argument("--out-dir", type=str, default=None,
+                        help="Default: cochleagrams/ next to combined/ (i.e. <wav folder>/cochleagrams).")
     parser.add_argument("--window-s", type=float, default=1.5, help="Seconds of each trial shown (default 1.5).")
     parser.add_argument("--smooth-ms", type=float, default=2.0, help="Moving-average width along time (default 2 ms).")
     args = parser.parse_args(argv)
 
     run_dir = Path(args.run_dir)
-    out_dir = Path(args.out_dir) if args.out_dir else run_dir / "cochleagrams"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    combined_dir = resolve_combined_dir(run_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else combined_dir.parent / "cochleagrams"
     files = find_combined_files(run_dir)
-    assert files, f"no combined .npz files under {run_dir / 'combined'} (run examples/combine_cf_batches.py first)"
+    assert files, f"no combined .npz files in {combined_dir} (run examples/combine_cf_batches.py first)"
+    out_dir.mkdir(parents=True, exist_ok=True)
     results = [load_combined(path) for path in files]
     vmax = global_vmax(results, args.window_s, args.smooth_ms)
     for result in results:
