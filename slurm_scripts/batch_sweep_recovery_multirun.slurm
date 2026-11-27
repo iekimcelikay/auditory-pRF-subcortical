@@ -22,19 +22,21 @@
 # Needs, on this machine:
 #   models_output/$DESIGN/combined/        the 25 combined cochlear results
 #   sweep_recovery_multirun_grids/$DESIGN/run_grid_design1000..1023.npz   from batch_sweep_grid_multirun.slurm
-#   BASELINE_DIR   folder with the single-run results
+#   BASELINE_DIR   OPTIONAL: folder with the single-run results
 #                  sweep_recovery_results_design1000_<low|mid|high>_<timestamp>.npz, e.g.
 #                  sweep_recovery_results/$DESIGN/<timestamp>_low-mid-high_on_grid_design1000
+#                  (same TAU_GRID and NOISE_MODEL as this run). Without it the "1 run" column is run 1 alone of this
+#                  job (same noise seeds and grid); with it the unfiltered pass also cross-checks run 1 against it.
 #
 # DESIGN (environment variable, default sweep_design_erb3band) picks the sweep design; everything of a design lives
 # under its name (stimuli/sweep_design_names.py): models_output/<DESIGN>/combined, sweep_recovery_multirun_grids/<DESIGN>,
 # sweep_recovery_results/<DESIGN>, sweep_groundtruth_results/<DESIGN>. e.g.  DESIGN=harmonic_sweep_armA sbatch <this script>
-# Environment variables (BASELINE_DIR is required):
+# Environment variables (BASELINE_DIR is optional):
 #   BASELINE_DIR=<folder>   NOISE="low mid high" (default)   N_VOXELS=100   N_REPEATS=1000
 # NOISE_MODEL=additive|legacy (default additive): MATLAB-style noise added as is to the signal scaled by ONE
 # global best-case constant (see auditory-prf-docs-all/additive_noise_design.md). 'legacy' = the earlier
 # per-voxel scaling. All results made before the additive noise used 'legacy' and have to be re-run.
-# The single-run baseline in BASELINE_DIR has to be made with the same NOISE_MODEL (run
+# A single-run baseline in BASELINE_DIR (if given) has to be made with the same NOISE_MODEL (run
 # batch_sweep_recovery.slurm first); the log warns if it was not.
 # HIGHPASS_CUTOFFS="128" (seconds; empty string = unfiltered only): after the unfiltered recovery, the same
 # recovery is repeated once per cutoff on the SAME noise seeds, after removing the slow DCT components from the
@@ -43,9 +45,9 @@
 # (the single-run baseline files are unfiltered). The unfiltered folder is identical to what this script wrote
 # before the filter existed.
 # Smoke run first (3 voxels, 5 repeats; read the per-voxel time in the log):
-#   BASELINE_DIR=<folder> NOISE=low N_VOXELS=3 N_REPEATS=5 sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
+#   NOISE=low N_VOXELS=3 N_REPEATS=5 sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
 # Full run:
-#   BASELINE_DIR=<folder> sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
+#   sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm      (add BASELINE_DIR=<folder> for the single-run cross-check)
 # Noise-free test (no noise, so one repeat is the whole experiment; no baseline folder needed;
 # small request so that it does not wait in the queue):
 #   NOISE=none N_REPEATS=1 sbatch --cpus-per-task=16 --mem=32G --time=00:30:00 \
@@ -63,11 +65,6 @@ NOISE_MODEL=${NOISE_MODEL:-additive}
 N_VOXELS=${N_VOXELS:-100}
 N_REPEATS=${N_REPEATS:-1000}
 HIGHPASS_CUTOFFS=${HIGHPASS_CUTOFFS-"128"}
-if [ -z "$BASELINE_DIR" ] && [ "$NOISE" != "none" ]; then
-    echo "BASELINE_DIR is not set (folder with the single-run sweep_recovery_results_design1000_*.npz;" \
-         "only NOISE=none can run without it)" >&2
-    exit 2
-fi
 BASELINE_ARGS=()
 if [ -n "$BASELINE_DIR" ]; then
     BASELINE_ARGS=(--baseline-dir "$BASELINE_DIR")

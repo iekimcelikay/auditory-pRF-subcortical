@@ -679,10 +679,15 @@ def recover_and_report(
     Ground truths: the same on-grid draw as ``sweep_recovery`` (``default_rng(MC_SEED)``), so the
     voxels equal the single-run results used as baseline.
 
+    ``baseline_dir`` is optional. With None, the "1-run" column is the estimate from run 1 alone of the same call
+    (same noise seeds, same candidate grid) for every noise level, and its margins and ties are those of the
+    24-run clean-ground-truth scoring; the baseline cross-check is skipped. With a folder, the unfiltered pass
+    compares run 1 alone with the single-run results (baseline check in the log) and takes the margins and ties
+    of the single-run file.
+
     Noise level ``"none"`` is the noise-free test: every repeat is identical, so use
     ``n_repeats=1``; there is no single-run result file for it, so the "1-run" column is the
-    estimate from run 1 alone in the same call, and ``baseline_dir`` may be None if every noise
-    level is ``"none"``.
+    estimate from run 1 alone in the same call.
 
     ``highpass_cutoff_s``: None = the unfiltered recovery (unchanged). A number = the same recovery after
     removing the slow DCT components (period longer than the cutoff, seconds) from the measurement and the
@@ -718,9 +723,10 @@ def recover_and_report(
 
     # load the baselines first: a mismatch should stop the job before the expensive recovery
     # (a filtered pass has none: the single-run baseline files are unfiltered)
-    needs_baseline = [noise for noise in noise_levels if noise != "none" and highpass_cutoff_s is None]
-    assert baseline_dir is not None or not needs_baseline, \
-        f"baseline_dir is required for the noise levels {needs_baseline}"
+    use_baseline = baseline_dir is not None and highpass_cutoff_s is None
+    needs_baseline = [noise for noise in noise_levels if noise != "none"] if use_baseline else []
+    if baseline_dir is None and highpass_cutoff_s is None and any(noise != "none" for noise in noise_levels):
+        logger.info("no baseline folder: the 1-run column is run 1 alone of this call (no single-run cross-check)")
     baselines = {noise: load_baseline_results(baseline_dir, noise, n_repeats, true_params)
                  for noise in needs_baseline}
 
@@ -739,9 +745,9 @@ def recover_and_report(
             projection=projection)
         logger.info("[%s] fixed-effects winner has a negative mean r in %.4f of the repeats", noise,
                     float(np.mean(result["winner_mean_r"] < 0)))
-        if noise == "none" or highpass_cutoff_s is not None:
-            # no single-run result file (noise-free, or the baseline files are unfiltered): run 1 alone of this
-            # call is the 1-run column
+        if noise == "none" or not use_baseline:
+            # no single-run result file (noise-free, no baseline folder, or a filtered pass: the baseline files are
+            # unfiltered): run 1 alone of this call is the 1-run column
             baseline_result = {"recovered_params": result["recovered_first_run"],
                                "margins": result["margins"], "n_ties": result["n_ties"]}
         else:
@@ -864,8 +870,10 @@ def _build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--grid-dir", default=None,
                          help="Default: sweep_recovery_multirun_grids/<design>.")
     recover.add_argument("--baseline-dir", default=None,
-                         help="folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz "
-                              "(required unless --noise is only 'none'); e.g. a folder under sweep_recovery_results/<design>/")
+                         help="optional: folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz "
+                              "(same tau grid and noise model); cross-checks run 1 alone against the single-run "
+                              "results of the unfiltered pass. Without it the 1-run column is run 1 alone of this "
+                              "call. e.g. a folder under sweep_recovery_results/<design>/")
     recover.add_argument("--output-dir", default=None,
                          help="Default: sweep_recovery_results/<design>.")
     recover.add_argument("--noise", nargs="+", default=["low", "mid", "high"],
@@ -906,8 +914,6 @@ def main(argv: Optional[list] = None) -> None:
         save_run_grid(Path(args.output_dir or design.grid_dir) / f"run_grid_design{args.design_seed}.npz",
                       candidate_params, template_matrix)
     else:
-        if args.baseline_dir is None and any(noise != "none" for noise in args.noise):
-            raise SystemExit("--baseline-dir is required unless --noise is only 'none'")
         run_designs, total_run_dur_s = build_run_designs(args.design_seeds, design)
         candidate_params, template_per_run = load_run_grids(Path(args.grid_dir or design.grid_dir), args.design_seeds)
         for cutoff_s in [None, *parse_cutoffs(args.highpass_cutoffs)]:     # unfiltered first, then each filter
