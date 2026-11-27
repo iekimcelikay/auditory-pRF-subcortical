@@ -52,6 +52,30 @@ SUBCORTICAL_PARAMS = dict(
     p_u_ratio=6.0,
 )
 
+# Single gamma, no undershoot: h(t) = t^(a-1) exp(-t/b) / (b^a Gamma(a)) with a = 9, b = 0.5.
+# build_hrf_kernel's peak_delay is the gamma mean a*b = 4.5 s and peak_disp the scale b = 0.5 s, so the true
+# peak (mode) is (a-1)*b = 4.0 s and the SD is sqrt(a)*b = 1.5 s. p_u_ratio=inf removes the undershoot term
+# (the under_* values are then unused).
+SINGLE_GAMMA_PEAK4_PARAMS = dict(
+    peak_delay=4.5, peak_disp=0.5,
+    under_delay=16.0, under_disp=1.0,
+    p_u_ratio=float("inf"),
+)
+
+# Name -> parameter dict, for the --hrf option of the recovery scripts. The default keeps the earlier runs reproducible.
+DEFAULT_HRF_NAME = "subcortical"
+HRF_PRESETS = {
+    "subcortical": SUBCORTICAL_PARAMS,
+    "single_gamma_peak4": SINGLE_GAMMA_PEAK4_PARAMS,
+}
+
+
+def get_hrf_params(name: str) -> dict:
+    """Return a copy of the HRF preset ``name`` (a key of ``HRF_PRESETS``)."""
+    if name not in HRF_PRESETS:
+        raise ValueError(f"unknown HRF preset {name!r}; choose from {sorted(HRF_PRESETS)}")
+    return dict(HRF_PRESETS[name])
+
 
 # ---------------------------------------------------------------------------
 # Core functions

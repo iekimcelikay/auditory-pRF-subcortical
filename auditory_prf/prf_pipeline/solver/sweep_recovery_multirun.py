@@ -30,7 +30,12 @@ import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from auditory_prf.prf_pipeline.hrf import SUBCORTICAL_PARAMS, build_hrf_kernel
+from auditory_prf.prf_pipeline.hrf import (
+    DEFAULT_HRF_NAME,
+    HRF_PRESETS,
+    build_hrf_kernel,
+    get_hrf_params,
+)
 from auditory_prf.prf_pipeline.run_assembly_sweeps import (
     SIGNAL_DT_S,
     load_raw_psths,
@@ -121,18 +126,26 @@ def build_run_designs(design_seeds: Sequence[int], design=None) -> tuple:
     return run_designs, float(durations_s[0])
 
 
+def hrf_dir(default_dir: str, hrf_name: str) -> str:
+    """Default folder for ``hrf_name``: the design's folder as is for the default HRF (earlier runs stay where
+    they are), ``<folder>_<hrf_name>`` for any other HRF so that it never overwrites or mixes with them."""
+    return default_dir if hrf_name == DEFAULT_HRF_NAME else f"{default_dir}_{hrf_name}"
+
+
 def save_run_grid(save_path: Path, candidate_params: np.ndarray,
-                  template_matrix_mean_removed: np.ndarray) -> None:
-    """Save one run order's grid: candidate_params (n_cand, 4), templates (n_cand, n_tr)."""
+                  template_matrix_mean_removed: np.ndarray, hrf_name: str = DEFAULT_HRF_NAME) -> None:
+    """Save one run order's grid: candidate_params (n_cand, 4), templates (n_cand, n_tr), and the HRF name
+    the templates were built with (checked by ``load_run_grids``)."""
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(save_path, candidate_params=candidate_params,
-             template_matrix_mean_removed=template_matrix_mean_removed)
+             template_matrix_mean_removed=template_matrix_mean_removed, hrf_name=np.array(hrf_name))
     logger.info("Run grid saved -> %s", save_path.resolve())
 
 
-def load_run_grids(grid_dir: Path, design_seeds: Sequence[int]) -> tuple:
-    """Load ``run_grid_design<seed>.npz`` for every seed.
+def load_run_grids(grid_dir: Path, design_seeds: Sequence[int], hrf_name: str = DEFAULT_HRF_NAME) -> tuple:
+    """Load ``run_grid_design<seed>.npz`` for every seed; stop if a grid was built with another HRF than
+    ``hrf_name`` (grids made before the --hrf option have no name and count as the default HRF).
 
     Returns
     -------
@@ -145,6 +158,10 @@ def load_run_grids(grid_dir: Path, design_seeds: Sequence[int]) -> tuple:
         with np.load(path) as grid:
             params = grid["candidate_params"]
             templates = grid["template_matrix_mean_removed"].astype(np.float32)
+            grid_hrf_name = str(grid["hrf_name"]) if "hrf_name" in grid.files else DEFAULT_HRF_NAME
+        assert grid_hrf_name == hrf_name, (
+            f"{path.name} was built with HRF {grid_hrf_name!r} but this recovery uses {hrf_name!r}; "
+            f"rebuild the grids with --hrf {hrf_name} or run the recovery with --hrf {grid_hrf_name}")
         if candidate_params is None:
             candidate_params = params
         assert np.array_equal(params, candidate_params), (
@@ -850,32 +867,39 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="Sweep design (stimuli/sweep_design_names.py): picks the run orders, the folders "
                                     "and the label shown in the plots.")
 
-    grid = commands.add_parser("build-grid", parents=[design_option],
+    hrf_option = argparse.ArgumentParser(add_help=False)          # shared by both commands
+    hrf_option.add_argument("--hrf", choices=sorted(HRF_PRESETS), default=DEFAULT_HRF_NAME,
+                            help="HRF of the templates and of the ground truth (hrf.py HRF_PRESETS). "
+                                 "subcortical: the earlier double gamma. single_gamma_peak4: single gamma, a=9, "
+                                 "b=0.5 (peak 4 s, SD 1.5 s, no undershoot). A non-default HRF gets its own "
+                                 "default folders (<folder>_<hrf>); build-grid and recover must use the same one.")
+
+    grid = commands.add_parser("build-grid", parents=[design_option, hrf_option],
                                help="candidate grid of ONE run order (un-normalised)")
     grid.add_argument("--design-seed", type=int, required=True)
     grid.add_argument("--results-dir", default=None,
                       help="Combined cochlear results. Default: models_output/<design>/combined.")
     grid.add_argument("--output-dir", default=None,
-                      help="Default: sweep_recovery_multirun_grids/<design>.")
+                      help="Default: sweep_recovery_multirun_grids/<design> (+ _<hrf> for a non-default --hrf).")
     grid.add_argument("--n-workers", type=int, default=n_workers_default)
     grid.add_argument("--tau-grid", choices=list(TAU_GRIDS), default="legacy",
                       help="tau candidate grid. legacy: 20-400 ms, 9 levels. padded17: 17 levels, 10.4-1919 ms, with "
                            "the 5 ground-truth levels 20-1000 ms on it; the recovery commands then draw the ground "
                            "truth from those 5 only. Build the same grid for every design seed.")
 
-    recover = commands.add_parser("recover", parents=[design_option],
+    recover = commands.add_parser("recover", parents=[design_option, hrf_option],
                                   help="24-run recovery (fixed effects: mean r^2 over runs)")
     recover.add_argument("--results-dir", default=None,
                          help="Combined cochlear results. Default: models_output/<design>/combined.")
     recover.add_argument("--grid-dir", default=None,
-                         help="Default: sweep_recovery_multirun_grids/<design>.")
+                         help="Default: sweep_recovery_multirun_grids/<design> (+ _<hrf> for a non-default --hrf).")
     recover.add_argument("--baseline-dir", default=None,
                          help="optional: folder with the single-run sweep_recovery_results_design1000_<noise>_*.npz "
                               "(same tau grid and noise model); cross-checks run 1 alone against the single-run "
                               "results of the unfiltered pass. Without it the 1-run column is run 1 alone of this "
                               "call. e.g. a folder under sweep_recovery_results/<design>/")
     recover.add_argument("--output-dir", default=None,
-                         help="Default: sweep_recovery_results/<design>.")
+                         help="Default: sweep_recovery_results/<design> (+ _<hrf> for a non-default --hrf).")
     recover.add_argument("--noise", nargs="+", default=["low", "mid", "high"],
                          choices=["none", "low", "mid", "high"],
                          help="'none' = noise-free test (use --n-repeats 1)")
@@ -903,7 +927,8 @@ def main(argv: Optional[list] = None) -> None:
     design = get_design(args.design)
     logger.info("design=%s (%s)", design.name, design.label)
     raw_psth_by_seq, cf_list_hz = load_raw_psths(Path(args.results_dir or design.combined_dir))
-    hrf_kernel, _ = build_hrf_kernel(**SUBCORTICAL_PARAMS, dt=SIGNAL_DT_S, duration=32.0)
+    hrf_kernel, _ = build_hrf_kernel(**get_hrf_params(args.hrf), dt=SIGNAL_DT_S, duration=32.0)
+    logger.info("hrf=%s", args.hrf)
 
     if args.command == "build-grid":
         run_designs, total_run_dur_s = build_run_designs([args.design_seed], design)
@@ -911,17 +936,18 @@ def main(argv: Optional[list] = None) -> None:
             raw_psth_by_seq, len(cf_list_hz), run_designs[0], total_run_dur_s, design.TR_S,
             design.SILENCE_SEQ_ID, hrf_kernel, tau_grid_ms=TAU_GRIDS[args.tau_grid], n_workers=args.n_workers,
             normalize=False)
-        save_run_grid(Path(args.output_dir or design.grid_dir) / f"run_grid_design{args.design_seed}.npz",
-                      candidate_params, template_matrix)
+        save_run_grid(Path(args.output_dir or hrf_dir(design.grid_dir, args.hrf)) / f"run_grid_design{args.design_seed}.npz",
+                      candidate_params, template_matrix, hrf_name=args.hrf)
     else:
         run_designs, total_run_dur_s = build_run_designs(args.design_seeds, design)
-        candidate_params, template_per_run = load_run_grids(Path(args.grid_dir or design.grid_dir), args.design_seeds)
+        candidate_params, template_per_run = load_run_grids(Path(args.grid_dir or hrf_dir(design.grid_dir, args.hrf)), args.design_seeds,
+                                                           hrf_name=args.hrf)
         for cutoff_s in [None, *parse_cutoffs(args.highpass_cutoffs)]:     # unfiltered first, then each filter
             recover_and_report(
                 raw_psth_by_seq, cf_list_hz, run_designs, total_run_dur_s, design.TR_S,
                 design.SILENCE_SEQ_ID, hrf_kernel, candidate_params, template_per_run,
                 Path(args.baseline_dir) if args.baseline_dir else None,
-                Path(args.output_dir or design.results_dir),
+                Path(args.output_dir or hrf_dir(design.results_dir, args.hrf)),
                 list(dict.fromkeys(args.noise)),
                 args.n_voxels, args.n_repeats, args.design_seeds, args.n_workers,
                 signal_scale=signal_scale_for(args.noise_model), full_score_repeats=args.full_score_repeats,

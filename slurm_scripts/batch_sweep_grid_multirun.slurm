@@ -34,17 +34,22 @@
 #   legacy    9 tau levels, 20-400 ms                              (the 7,560 templates above)
 #   padded17  17 tau levels, 10.4-1919 ms, with the 5 ground-truth levels 20-1000 ms on it
 #             (30 CF x 7 alpha x 17 tau x 4 w = 14,280 templates, so about twice the build time)
+# HRF=subcortical|single_gamma_peak4 (default subcortical, the earlier double gamma) is the HRF of the templates; the
+# recovery (batch_sweep_recovery_multirun.slurm) must use the same one and stops otherwise. A non-default HRF is
+# written to sweep_recovery_multirun_grids/$DESIGN_<hrf>, so the earlier grids are never overwritten.
+# e.g.  HRF=single_gamma_peak4 sbatch --array=0-23 slurm_scripts/batch_sweep_grid_multirun.slurm
 # Build all 24 seeds with the SAME TAU_GRID: the recovery stops if the candidate orders of two grids differ.
 # e.g.  DESIGN=<design> TAU_GRID=padded17 sbatch slurm_scripts/batch_sweep_grid_multirun.slurm
 
 DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
 TAU_GRID=${TAU_GRID:-legacy}              # legacy | padded17
+HRF=${HRF:-subcortical}                   # subcortical | single_gamma_peak4
 DESIGN_SEED=$(( 1000 + ${SLURM_ARRAY_TASK_ID:-0} ))
 
 # Print job information
 echo "==================================="
 echo "Job started at $(date)"
-echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}  design: $DESIGN  design seed: $DESIGN_SEED  tau grid: $TAU_GRID"
+echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}  design: $DESIGN  design seed: $DESIGN_SEED  tau grid: $TAU_GRID  hrf: $HRF"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "==================================="
@@ -52,7 +57,7 @@ echo "==================================="
 module load Miniforge3
 export AUDITORY_PRF_ROOT=/scratch/ecelikay/workspace/auditory-pRF-subcortical
 cd $AUDITORY_PRF_ROOT
-mkdir -p outputs_terminal sweep_recovery_multirun_grids/$DESIGN
+mkdir -p outputs_terminal
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -62,6 +67,7 @@ conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.sol
     --design $DESIGN \
     --design-seed $DESIGN_SEED \
     --tau-grid $TAU_GRID \
+    --hrf $HRF \
     --n-workers $SLURM_CPUS_PER_TASK
 PYTHON_STATUS=$?
 

@@ -44,6 +44,11 @@
 # writes its own result folder with the suffix _hp<cutoff>; its "1 run" column is run 1 alone of that pass
 # (the single-run baseline files are unfiltered). The unfiltered folder is identical to what this script wrote
 # before the filter existed.
+# HRF=subcortical|single_gamma_peak4 (default subcortical, the earlier double gamma): the HRF of the templates AND of the
+# ground truth. single_gamma_peak4 = single gamma a=9, b=0.5 (peak 4 s, SD 1.5 s, no undershoot). It must be the HRF the
+# grids were built with (batch_sweep_grid_multirun.slurm, same HRF; the recovery stops otherwise). A non-default HRF
+# reads grids from sweep_recovery_multirun_grids/$DESIGN_<hrf> and writes to sweep_recovery_results/$DESIGN_<hrf>,
+# so the earlier runs are never overwritten. e.g.  HRF=single_gamma_peak4 sbatch <this script>
 # Smoke run first (3 voxels, 5 repeats; read the per-voxel time in the log):
 #   NOISE=low N_VOXELS=3 N_REPEATS=5 sbatch slurm_scripts/batch_sweep_recovery_multirun.slurm
 # Full run:
@@ -60,6 +65,7 @@
 # ceiling is 02:00:00 for the default single cutoff.
 
 DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
+HRF=${HRF:-subcortical}                   # subcortical | single_gamma_peak4
 NOISE=${NOISE:-"low mid high"}
 NOISE_MODEL=${NOISE_MODEL:-additive}
 N_VOXELS=${N_VOXELS:-100}
@@ -76,7 +82,7 @@ echo "Job started at $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "design=$DESIGN noise=$NOISE noise_model=$NOISE_MODEL n_voxels=$N_VOXELS n_repeats=$N_REPEATS baseline=$BASELINE_DIR highpass=[$HIGHPASS_CUTOFFS]"
+echo "design=$DESIGN hrf=$HRF noise=$NOISE noise_model=$NOISE_MODEL n_voxels=$N_VOXELS n_repeats=$N_REPEATS baseline=$BASELINE_DIR highpass=[$HIGHPASS_CUTOFFS]"
 echo "==================================="
 
 module load Miniforge3
@@ -90,6 +96,7 @@ export MKL_NUM_THREADS=1
 conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.solver.sweep_recovery_multirun \
     recover \
     --design $DESIGN \
+    --hrf $HRF \
     "${BASELINE_ARGS[@]}" \
     --noise $NOISE \
     --noise-model $NOISE_MODEL \
