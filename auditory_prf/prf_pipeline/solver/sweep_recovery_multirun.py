@@ -70,11 +70,13 @@ from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     PARAM_NAMES,
     RECTIFY,
     RHO,
+    TAU_GRIDS,
     TIE_TOL,
     build_candidate_grid,
     clean_margins,
     plot_relative_mse,
     plot_relative_mse_by_true_value,
+    plot_recovered_candidate_heatmap,
     plot_recovered_level_distribution,
     plot_relative_mse_distribution,
     sample_ground_truths,
@@ -815,6 +817,10 @@ def recover_and_report(
             true_params, recovered_by_noise, candidate_params,
             run_dir / f"recovered_tau_distribution_{method}.png", param_name="tau_ms",
             n_repeats=n_repeats, design_label=design_label)
+        plot_recovered_candidate_heatmap(                  # only written when the candidate grid is finer than the ground truth
+            true_params, recovered_by_noise, candidate_params,
+            run_dir / f"recovered_tau_candidate_heatmap_{method}.png", param_name="tau_ms",
+            n_repeats=n_repeats, design_label=design_label)
     save_run_comparison_table(summary_by_method, run_dir / "run_comparison_table.csv")
     plot_run_comparison(summary_by_method, run_dir / "run_comparison.png", n_voxels, n_repeats,
                         design_label=design_label)
@@ -846,6 +852,10 @@ def _build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--output-dir", default=None,
                       help="Default: sweep_recovery_multirun_grids/<design>.")
     grid.add_argument("--n-workers", type=int, default=n_workers_default)
+    grid.add_argument("--tau-grid", choices=list(TAU_GRIDS), default="legacy",
+                      help="tau candidate grid. legacy: 20-400 ms, 9 levels. padded17: 17 levels, 10.4-1919 ms, with "
+                           "the 5 ground-truth levels 20-1000 ms on it; the recovery commands then draw the ground "
+                           "truth from those 5 only. Build the same grid for every design seed.")
 
     recover = commands.add_parser("recover", parents=[design_option],
                                   help="24-run recovery (fixed effects: mean r^2 over runs)")
@@ -891,7 +901,8 @@ def main(argv: Optional[list] = None) -> None:
         run_designs, total_run_dur_s = build_run_designs([args.design_seed], design)
         candidate_params, template_matrix = build_candidate_grid(
             raw_psth_by_seq, len(cf_list_hz), run_designs[0], total_run_dur_s, design.TR_S,
-            design.SILENCE_SEQ_ID, hrf_kernel, n_workers=args.n_workers, normalize=False)
+            design.SILENCE_SEQ_ID, hrf_kernel, tau_grid_ms=TAU_GRIDS[args.tau_grid], n_workers=args.n_workers,
+            normalize=False)
         save_run_grid(Path(args.output_dir or design.grid_dir) / f"run_grid_design{args.design_seed}.npz",
                       candidate_params, template_matrix)
     else:

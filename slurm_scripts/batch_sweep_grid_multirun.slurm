@@ -29,14 +29,22 @@
 # under its name (stimuli/sweep_design_names.py): models_output/<DESIGN>/combined, sweep_recovery_multirun_grids/<DESIGN>,
 # sweep_recovery_results/<DESIGN>, sweep_groundtruth_results/<DESIGN>. e.g.  DESIGN=harmonic_sweep_armA sbatch <this script>
 # Needs the 25 combined cochlear results of the design on this machine: models_output/$DESIGN/combined/ (24 trials + silence_20s)
+#
+# TAU_GRID (environment variable, default legacy) picks the tau candidate grid (solver/sweep_recovery.py TAU_GRIDS):
+#   legacy    9 tau levels, 20-400 ms                              (the 7,560 templates above)
+#   padded17  17 tau levels, 10.4-1919 ms, with the 5 ground-truth levels 20-1000 ms on it
+#             (30 CF x 7 alpha x 17 tau x 4 w = 14,280 templates, so about twice the build time)
+# Build all 24 seeds with the SAME TAU_GRID: the recovery stops if the candidate orders of two grids differ.
+# e.g.  DESIGN=<design> TAU_GRID=padded17 sbatch slurm_scripts/batch_sweep_grid_multirun.slurm
 
 DESIGN=${DESIGN:-sweep_design_erb3band}   # sweep_design_erb3band | harmonic_sweep_armA | harmonic_sweep_armB
+TAU_GRID=${TAU_GRID:-legacy}              # legacy | padded17
 DESIGN_SEED=$(( 1000 + ${SLURM_ARRAY_TASK_ID:-0} ))
 
 # Print job information
 echo "==================================="
 echo "Job started at $(date)"
-echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}  design: $DESIGN  design seed: $DESIGN_SEED"
+echo "Job ID: $SLURM_JOB_ID  array task: ${SLURM_ARRAY_TASK_ID:-none}  design: $DESIGN  design seed: $DESIGN_SEED  tau grid: $TAU_GRID"
 echo "Running on host: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "==================================="
@@ -53,6 +61,7 @@ conda run --no-capture-output -n strf3.9 python -m auditory_prf.prf_pipeline.sol
     build-grid \
     --design $DESIGN \
     --design-seed $DESIGN_SEED \
+    --tau-grid $TAU_GRID \
     --n-workers $SLURM_CPUS_PER_TASK
 PYTHON_STATUS=$?
 

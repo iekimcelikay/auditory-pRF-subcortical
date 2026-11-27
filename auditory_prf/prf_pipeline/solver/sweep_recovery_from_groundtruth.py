@@ -50,6 +50,7 @@ from auditory_prf.prf_pipeline.solver.parallel_recovery import map_voxels
 from auditory_prf.prf_pipeline.solver.sweep_groundtruth_distribution import NOISE_JITTER_GROUNDTRUTH
 from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     PARAM_NAMES,
+    plot_recovered_candidate_heatmap,
     plot_recovered_level_distribution,
     plot_relative_mse,
     plot_relative_mse_by_true_value,
@@ -381,6 +382,10 @@ def recover_and_report_groundtruth(
         plot_recovered_level_distribution(
             true_params, recovered_by_noise, candidate_params,
             run_dir / f"recovered_tau_distribution_{method}.png", param_name="tau_ms",
+            n_repeats=n_repeats, design_label=design_label)
+        plot_recovered_candidate_heatmap(                  # only written when the candidate grid is finer than the ground truth
+            true_params, recovered_by_noise, candidate_params,
+            run_dir / f"recovered_tau_candidate_heatmap_{method}.png", param_name="tau_ms",
             n_repeats=n_repeats, design_label=design_label)
     for estimate in ESTIMATES:
         save_accuracy_table(accuracy[estimate], run_dir / f"accuracy_table_{estimate}.csv",

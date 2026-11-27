@@ -12,6 +12,8 @@ Designs
     sweep_design_erb3band    3 ERB bands x 8 rates, continuous sweeps (stimuli/sweep_design_erb.py); the default
     harmonic_sweep_armA      harmonic sweeps with silences, 3 rates x 2 tones x 4 ISIs   (stimuli/sweep_design_harmonic_complex.py)
     harmonic_sweep_armB      harmonic sweeps with silences, 3 rates x 4 tones x 2 ISIs
+    harmonic_tau_setA        static harmonic tones, Kim-grid set A (8 tone/ISI conditions) x 3 f0 = 24 trials, tau probe
+                             (stimuli/render_harmonic_tau_wavs.py, run orders in stimuli/sweep_design_harmonic_complex.py)
 
 The label of a design (``design_label``) is what plots and result metadata show, so that "armA" is never the only
 thing a reader sees. This module has no heavy imports (no numpy, no pipeline), so the cochlea runner, the renderer and
@@ -22,8 +24,12 @@ ERB_DESIGN_NAME = "sweep_design_erb3band"
 HARMONIC_DESIGN_PREFIX = "harmonic_sweep_arm"
 HARMONIC_LAYOUT_COUNTS = {"A": {"n_tones": 2, "n_isis": 4}, "B": {"n_tones": 4, "n_isis": 2}}
 N_RATES = 3
+TAU_DESIGN_PREFIX = "harmonic_tau_set"
+TAU_SET_LETTERS = ("A",)             # set B (stimuli/render_harmonic_tau_wavs.py) is a saved candidate, not a design yet
 
-DESIGN_NAMES = (ERB_DESIGN_NAME,) + tuple(f"{HARMONIC_DESIGN_PREFIX}{layout}" for layout in HARMONIC_LAYOUT_COUNTS)
+TAU_DESIGN_NAMES = tuple(f"{TAU_DESIGN_PREFIX}{letter}" for letter in TAU_SET_LETTERS)
+DESIGN_NAMES = ((ERB_DESIGN_NAME,) + tuple(f"{HARMONIC_DESIGN_PREFIX}{layout}" for layout in HARMONIC_LAYOUT_COUNTS)
+                + TAU_DESIGN_NAMES)
 DEFAULT_DESIGN_NAME = ERB_DESIGN_NAME
 
 
@@ -45,6 +51,8 @@ def design_label(name: str) -> str:
     check_design_name(name)
     if name == ERB_DESIGN_NAME:
         return "ERB 3 bands x 8 rates (continuous sweeps)"
+    if name in TAU_DESIGN_NAMES:
+        return f"Harmonic tones, Kim-grid set {name[len(TAU_DESIGN_PREFIX):]} x 3 f0 (tone/ISI, tau probe)"
     counts = HARMONIC_LAYOUT_COUNTS[name[len(HARMONIC_DESIGN_PREFIX):]]
     return f"Harmonic sweeps: {N_RATES} rates x {counts['n_tones']} tones x {counts['n_isis']} ISIs"
 

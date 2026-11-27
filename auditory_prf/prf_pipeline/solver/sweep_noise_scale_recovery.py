@@ -46,7 +46,10 @@ from auditory_prf.prf_pipeline.solver.highpass import highpass_projection, highp
 from auditory_prf.prf_pipeline.solver.sweep_highpass_drift_test import DEFAULT_CUTOFFS_S
 from auditory_prf.prf_pipeline.solver.sweep_recovery import (
     PARAM_NAMES,
+    ground_truth_levels,
+    plot_recovered_candidate_heatmap,
     plot_recovered_level_distribution,
+    recovered_level_fractions,
     sample_ground_truths,
     save_summary_table,
     summarize,
@@ -250,8 +253,37 @@ def run_noise_scale_sweep(
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────
+def level_matrix_scores(level_fractions: np.ndarray) -> dict:
+    """How close a true-vs-recovered level matrix is to its diagonal.
+
+    Parameters
+    ----------
+    level_fractions : np.ndarray, shape (n_levels, n_levels)
+        [true level, recovered level], every row sums to 1 (``recovered_level_fractions``); a row
+        of NaN (no voxel has that true level) is left out of the means.
+
+    Returns
+    -------
+    dict with ``diag_mean`` (mean over true levels of the share recovered exactly = the diagonal; every level counts
+    the same whatever its number of voxels; chance 1 / n_levels) and ``within1_mean`` (the same with the diagonal
+    and its two neighbours, i.e. at most one level off; chance ``within1_chance_share(n_levels)``).
+    """
+    n_levels = level_fractions.shape[0]
+    assert level_fractions.shape == (n_levels, n_levels), level_fractions.shape
+    diagonal_share = np.diag(level_fractions)                                              # (n_levels,)
+    within1_share = np.array([level_fractions[i, max(0, i - 1):i + 2].sum() for i in range(n_levels)])
+    return {"diag_mean": float(np.nanmean(diagonal_share)), "within1_mean": float(np.nanmean(within1_share))}
+
+
+def within1_chance_share(n_levels: int) -> float:
+    """``within1_mean`` of a uniform random guess: the mean number of levels in the band (3 inside, 2 at the two ends) / n_levels."""
+    band_sizes = np.full(n_levels, 3.0)
+    band_sizes[[0, -1]] = 2.0
+    return float(band_sizes.mean() / n_levels)
+
+
 def tau_summary(true_tau_ms: np.ndarray, recovered_tau_ms: np.ndarray, levels_ms: np.ndarray) -> dict:
-    """Three numbers for tau.
+    """Five numbers for tau.
 
     Parameters
     ----------
@@ -264,7 +296,8 @@ def tau_summary(true_tau_ms: np.ndarray, recovered_tau_ms: np.ndarray, levels_ms
     -------
     dict with ``exact_share`` (share of estimates on the true level), ``correlation`` (Pearson r between
     ln true tau and the voxel's mean ln recovered tau; NaN if one of them is constant), ``relative_mse``
-    (mean ((recovered - true) / true)^2 over all estimates).
+    (mean ((recovered - true) / true)^2 over all estimates), and ``diag_mean`` / ``within1_mean`` of the true-vs-recovered
+    level matrix (``level_matrix_scores``).
     """
     nearest = levels_ms[np.abs(np.log(recovered_tau_ms)[..., None] - np.log(levels_ms)).argmin(axis=-1)]
     mean_log = np.log(recovered_tau_ms).mean(axis=1)
@@ -273,7 +306,8 @@ def tau_summary(true_tau_ms: np.ndarray, recovered_tau_ms: np.ndarray, levels_ms
                    if np.std(log_true) > 0 and np.std(mean_log) > 1e-12 else float("nan"))
     return {"exact_share": float((nearest == true_tau_ms[:, None]).mean()),
             "correlation": correlation,
-            "relative_mse": float((((recovered_tau_ms - true_tau_ms[:, None]) / true_tau_ms[:, None]) ** 2).mean())}
+            "relative_mse": float((((recovered_tau_ms - true_tau_ms[:, None]) / true_tau_ms[:, None]) ** 2).mean()),
+            **level_matrix_scores(recovered_level_fractions(true_tau_ms, recovered_tau_ms, levels_ms, log_spaced=True))}
 
 
 def best_constant_relative_mse(true_tau_ms: np.ndarray) -> float:
@@ -286,11 +320,11 @@ def save_tau_summary_table(rows: list, save_path: Path) -> None:
     """CSV: one row per filter x noise scale x method."""
     with open(save_path, "w") as f:
         f.write("noise_scale,total_sd_percent,white_sd_percent,filter,method,tau_exact_share,tau_correlation,"
-                "tau_relative_mse\n")
+                "tau_relative_mse,tau_diag_mean,tau_within1_mean\n")
         for row in rows:
             f.write(f"{row['noise_scale']:g},{row['total_sd_percent']:.4g},{row['white_sd_percent']:.4g},"
                     f"{row['filter']},{row['method']},{row['exact_share']:.6g},{row['correlation']:.6g},"
-                    f"{row['relative_mse']:.6g}\n")
+                    f"{row['relative_mse']:.6g},{row['diag_mean']:.6g},{row['within1_mean']:.6g}\n")
 
 
 FILTER_LINESTYLES = ["-", "--", ":", "-."]
@@ -343,7 +377,7 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
     """Tables, result files and heatmaps of one filter ("none" keeps the original file names); returns the summary rows."""
     infix = "" if filter_name == "none" else f"{filter_name}_"
     suffix = "" if filter_name == "none" else f"_{filter_name}"
-    levels_ms = np.unique(candidate_params[:, TAU_INDEX])
+    levels_ms = ground_truth_levels(true_params, candidate_params, "tau_ms")    # scored on the ground-truth levels
     true_tau = true_params[:, TAU_INDEX]
     level_values = {f"level_values_{name}": np.unique(candidate_params[:, i]) for i, name in enumerate(PARAM_NAMES)}
     rows, recovered_by_method = [], {"1run": {}, "fixed_effects": {}}
@@ -356,8 +390,10 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
             rows.append({"noise_scale": k, "total_sd_percent": total_sd_percent[k],
                          "white_sd_percent": white_sd_percent[k], "filter": filter_name, "method": method_key,
                          **tau_summary(true_tau, tau, levels_ms)})
-            logger.info("%s k=%g %s: tau exact %.3f correlation %.3f relative MSE %.3f", filter_name, k,
-                        method_key, rows[-1]["exact_share"], rows[-1]["correlation"], rows[-1]["relative_mse"])
+            logger.info("%s k=%g %s: tau exact %.3f correlation %.3f relative MSE %.3f diagonal %.3f (chance %.3f) "
+                        "within 1 level %.3f (chance %.3f)", filter_name, k, method_key, rows[-1]["exact_share"],
+                        rows[-1]["correlation"], rows[-1]["relative_mse"], rows[-1]["diag_mean"],
+                        1.0 / len(levels_ms), rows[-1]["within1_mean"], within1_chance_share(len(levels_ms)))
         label = f"k={k:g}"
         for estimate in recovered_by_method:
             recovered_by_method[estimate][label] = recovered[estimate]
@@ -380,6 +416,10 @@ def _report_one_filter(filter_name: str, results: dict, true_params: np.ndarray,
             true_params, recovered_by_label, candidate_params,
             run_dir / f"recovered_tau_distribution_{method}{suffix}.png", param_name="tau_ms", n_repeats=n_repeats,
             design_label=design_label)
+        plot_recovered_candidate_heatmap(                  # only written when the candidate grid is finer than the ground truth
+            true_params, recovered_by_label, candidate_params,
+            run_dir / f"recovered_tau_candidate_heatmap_{method}{suffix}.png", param_name="tau_ms",
+            n_repeats=n_repeats, design_label=design_label)
     return rows
 
 

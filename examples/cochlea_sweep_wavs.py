@@ -3,6 +3,7 @@
 The WAV folder is stimuli/produced/<design name> (see stimuli/sweep_design_names.py) and the results go to
 models_output/<folder name>. Names it understands (parse_sweep_filename):
     harmonic_sweep_armA_01_rate6hz_dur167ms_isi83ms.wav        harmonic sweeps with silences (stimuli/render_harmonic_sweep_wavs.py)
+    harmonic_tau_setA_01_f0100hz_dur100ms_isi67ms.wav          static harmonic tones, tau probe (stimuli/render_harmonic_tau_wavs.py)
     fmsweep_fc193.9hz_lo125.0hz_hi276.2hz_010cyc_0.50hz.wav   ERB 3-band design (stimuli/render_sweep_design_erb_wavs.py)
     fmsweep_fc774.6hz_shift0.55oct_017cyc_0.85hz.wav          earlier centered design
     silence_20s.wav                                            the silent trial
@@ -60,6 +61,13 @@ TONE_ISI_NAME_PATTERN = re.compile(
     r"^(?P<design>harmonic_sweep_arm[A-Z])_(?P<index>\d{2})"
     r"_rate(?P<rate_hz>\d+(?:\.\d+)?)hz_dur(?P<tone_ms>\d+)ms_isi(?P<isi_ms>\d+)ms"
 )
+# Static harmonic tones of the tau probe (stimuli/render_harmonic_tau_wavs.py): index 01-24 = f0 (repetition), then Kim
+# condition; dur / isi are name-rounded ms, the exact sample counts are in design_info.json, e.g.
+#   harmonic_tau_setA_01_f0100hz_dur100ms_isi67ms.wav
+TAU_NAME_PATTERN = re.compile(
+    r"^(?P<design>harmonic_tau_set[A-Z])_(?P<index>\d{2})"
+    r"_f0(?P<f0_hz>\d+(?:\.\d+)?)hz_dur(?P<tone_ms>\d+)ms_isi(?P<isi_ms>\d+)ms"
+)
 TONE_ISI_TRIAL_DURATION_S = 20.0
 TONE_ISI_LOWER_HZ = 125.0     # every tone sweeps the full band (f0 of the harmonic complex)
 TONE_ISI_UPPER_HZ = 800.0
@@ -102,6 +110,21 @@ def parse_sweep_filename(filename: str) -> dict:
         return {"stimulus_type": "silence",
                 "trial_duration_s": float(silence_match.group("duration_s")),
                 "n_cycles": 0}
+    tau_match = TAU_NAME_PATTERN.match(filename)
+    if tau_match is not None:
+        design = check_design_name(tau_match.group("design"))
+        return {
+            "stimulus_type": "harmonic_tau_tones",
+            "design": design,
+            "design_label": design_label(design),
+            "set": design[-1],                                      # "A"
+            "condition_index": int(tau_match.group("index")),
+            "carrier": "harmonic",
+            "f0_hz": float(tau_match.group("f0_hz")),
+            "tone_ms": float(tau_match.group("tone_ms")),
+            "isi_ms": float(tau_match.group("isi_ms")),
+            "trial_duration_s": TONE_ISI_TRIAL_DURATION_S,
+        }
     tone_isi_match = TONE_ISI_NAME_PATTERN.match(filename)
     if tone_isi_match is not None:
         design = check_design_name(tone_isi_match.group("design"))

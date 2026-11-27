@@ -41,7 +41,13 @@ from stimuli.sweep_design_centered import (
     TR_S,
     TRIAL_DURATION_S,
 )
-from stimuli.sweep_design_names import HARMONIC_LAYOUT_COUNTS, harmonic_design_name
+from stimuli.render_harmonic_tau_wavs import F0S_HZ_DEFAULT, trial_conditions as tau_trial_conditions, wav_stem as tau_wav_stem
+from stimuli.sweep_design_names import (
+    HARMONIC_LAYOUT_COUNTS,
+    TAU_DESIGN_PREFIX,
+    TAU_SET_LETTERS,
+    harmonic_design_name,
+)
 
 SILENCE_SEQ_ID = f"silence_{TRIAL_DURATION_S:.0f}s"
 
@@ -107,3 +113,26 @@ class HarmonicSweepRunDesign:
     def total_run_duration_s(run_design: list) -> float:
         """Run length implied by a design: last onset + trial + closing blank."""
         return run_design[-1][1] + TRIAL_DURATION_S + CLOSING_BLANK_S
+
+
+class HarmonicTauRunDesign(HarmonicSweepRunDesign):
+    """Run orders of the tau-probe design (static harmonic tones, stimuli/render_harmonic_tau_wavs.py).
+
+    Same run structure as the harmonic sweeps (one run = opening blank + 24 trials + 8 nulls, shuffled, x 20 s + closing
+    blank = 652.8 s), but the 24 trials are the 8 Kim-grid timing conditions of a set once per f0 (= repetition); the
+    soundfileid of a trial is its WAV stem, e.g. harmonic_tau_setA_01_f0100hz_dur100ms_isi67ms.
+
+    Parameters
+    ----------
+    set_letter : {"A"}
+        Kim-grid value set (registered sets: sweep_design_names.TAU_SET_LETTERS).
+    f0s_hz : sequence of float
+        One f0 per repetition; must match the f0 values the WAVs were rendered with.
+    """
+
+    def __init__(self, set_letter: str = "A", f0s_hz=F0S_HZ_DEFAULT):
+        assert set_letter in TAU_SET_LETTERS, set_letter
+        self.layout = set_letter
+        self.name = f"{TAU_DESIGN_PREFIX}{set_letter}"
+        self.conditions = tau_trial_conditions(set_letter, f0s_hz)
+        self._seq_id_by_index = {c["index"]: tau_wav_stem(set_letter, c) for c in self.conditions}

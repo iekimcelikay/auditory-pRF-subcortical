@@ -55,6 +55,12 @@ def get_design(name: str = DEFAULT_DESIGN_NAME) -> SweepDesign:
         import stimuli.sweep_design_erb as erb
         run_orders = {"build_run_design": erb.build_run_design, "total_run_duration_s": erb.total_run_duration_s,
                       "SILENCE_SEQ_ID": erb.SILENCE_SEQ_ID, "TR_S": erb.TR_S}
+    elif name in names.TAU_DESIGN_NAMES:
+        from stimuli.sweep_design_harmonic_complex import HarmonicTauRunDesign
+        harmonic = HarmonicTauRunDesign(name[len(names.TAU_DESIGN_PREFIX):])
+        run_orders = {"build_run_design": harmonic.build_run_design,
+                      "total_run_duration_s": harmonic.total_run_duration_s,
+                      "SILENCE_SEQ_ID": harmonic.SILENCE_SEQ_ID, "TR_S": harmonic.TR_S}
     else:
         from stimuli.sweep_design_harmonic_complex import HarmonicSweepRunDesign
         harmonic = HarmonicSweepRunDesign(name[-1])

@@ -80,6 +80,13 @@ logger = logging.getLogger(__name__)
 
 PARAM_NAMES = ["cf_index", "alpha", "tau_ms", "w"]
 TAU_GRID_MS = list(TAU_ON_GRID_MS)            # 20-400 ms, tau_on == tau_off
+# Padded tau grid of the tone/ISI tau experiment (--tau-grid padded17): 5 ground-truth levels, 20-1000 ms, log-uniform
+# (ratio 50 ** 0.25 = 2.66x), on a 17-level candidate grid with 3 candidates per ground-truth step and 2 padded
+# levels (10.4, 14.4 and 1385, 1919 ms) at each end so the edge ground truths are not the edge of the search.
+_TAU_GT_RATIO = 50.0 ** 0.25
+TAU_GT_LEVELS_MS = (20.0 * _TAU_GT_RATIO ** np.arange(5)).tolist()                   # 20, 53.2, 141.4, 376.1, 1000
+TAU_GRID_PADDED_MS = (20.0 * _TAU_GT_RATIO ** (np.arange(-2, 15) / 3)).tolist()     # 17 levels, 10.4 ... 1919
+TAU_GRIDS = {"legacy": TAU_GRID_MS, "padded17": TAU_GRID_PADDED_MS}
 W_GRID = [0.7, 0.75, 0.8, 0.85]               # same as the combined tone-cloud recovery
 W_MIN, W_MAX = 0.7, 0.85
 RECTIFY = True
@@ -189,16 +196,28 @@ def sample_ground_truths(
     on_grid: random candidate-grid rows. off_grid: cf_index uniform over the CFs, alpha and
     tau_ms log-uniform over the grid's range (independent of CF), w uniform.
 
+    When the candidate grid contains the five ground-truth tau levels ``TAU_GT_LEVELS_MS`` (the padded17 grid),
+    the ground truth uses only those levels: on_grid keeps the candidate rows at them, off_grid draws tau over
+    their range (20-1000 ms), so the padded candidate levels are never a ground truth. Any other grid (the
+    legacy 20-400 ms one) behaves as before.
+
     Returns
     -------
     np.ndarray, shape (n_voxels, 4)
     """
     assert gt_mode in ("on_grid", "off_grid"), gt_mode
+    tau_col = PARAM_NAMES.index("tau_ms")
+    gt_levels = np.asarray(TAU_GT_LEVELS_MS)
+    on_gt_level = np.isclose(candidate_params[:, tau_col][:, None], gt_levels[None, :], rtol=1e-6)    # (n_cand, 5)
+    has_gt_levels = bool(on_gt_level.any(axis=0).all())                      # every ground-truth level is in the grid
     if gt_mode == "on_grid":
-        return candidate_params[rng.integers(0, len(candidate_params), size=n_voxels)].copy()
+        rows = candidate_params[on_gt_level.any(axis=1)] if has_gt_levels else candidate_params
+        return rows[rng.integers(0, len(rows), size=n_voxels)].copy()
     cf_index = rng.integers(0, n_cf, size=n_voxels).astype(float)
     alpha = 2 ** rng.uniform(np.log2(ALPHA_MIN), np.log2(ALPHA_MAX), size=n_voxels)
-    tau_ms = 2 ** rng.uniform(np.log2(min(TAU_GRID_MS)), np.log2(max(TAU_GRID_MS)), size=n_voxels)
+    tau_low, tau_high = ((gt_levels.min(), gt_levels.max()) if has_gt_levels
+                         else (min(TAU_GRID_MS), max(TAU_GRID_MS)))
+    tau_ms = 2 ** rng.uniform(np.log2(tau_low), np.log2(tau_high), size=n_voxels)
     w = rng.uniform(W_MIN, W_MAX, size=n_voxels)
     return np.column_stack([cf_index, alpha, tau_ms, w])
 
@@ -603,6 +622,55 @@ def recovered_level_fractions(true_value: np.ndarray, recovered_value: np.ndarra
     return fractions
 
 
+def ground_truth_levels(true_params: np.ndarray, candidate_params: np.ndarray, param_name: str) -> np.ndarray:
+    """Levels of param_name the ground truth sits on.
+
+    The distinct true values when every one is a candidate-grid level (on_grid ground truth; a finer or
+    padded candidate grid then has more levels than the ground truth). Otherwise (off_grid ground truth)
+    all candidate-grid levels, as before.
+
+    Returns
+    -------
+    np.ndarray, shape (n_levels,), ascending, values taken from the candidate grid
+    """
+    p = PARAM_NAMES.index(param_name)
+    candidate_levels = np.unique(candidate_params[:, p])
+    true_values = np.unique(true_params[:, p])
+    nearest = [int(np.abs(candidate_levels - value).argmin()) for value in true_values]
+    if not np.allclose(candidate_levels[nearest], true_values):
+        return candidate_levels
+    return candidate_levels[np.unique(nearest)]
+
+
+def recovered_candidate_fractions(true_value: np.ndarray, recovered_value: np.ndarray, true_levels: np.ndarray,
+                                  candidate_levels: np.ndarray, log_spaced: bool) -> np.ndarray:
+    """Which candidate-grid level was recovered for each ground-truth level (rectangular).
+
+    Parameters
+    ----------
+    true_value : np.ndarray, shape (n_voxels,)
+    recovered_value : np.ndarray, shape (n_voxels, n_repeats)
+        Snapped to the nearest candidate level (log distance if log_spaced).
+    true_levels : np.ndarray, shape (n_true,)
+    candidate_levels : np.ndarray, shape (n_candidates,)
+
+    Returns
+    -------
+    np.ndarray, shape (n_true, n_candidates)
+        [true level, recovered candidate level] = share of the recoveries of the voxels with that true level
+        (rows sum to 1; NaN for a level no voxel has).
+    """
+    true_idx = _level_index(true_value, true_levels, log_spaced)                      # (n_voxels,)
+    recovered_idx = _level_index(recovered_value, candidate_levels, log_spaced)       # (n_voxels, n_repeats)
+    fractions = np.full((len(true_levels), len(candidate_levels)), np.nan)
+    for level_i in range(len(true_levels)):
+        recovered_of_level = recovered_idx[true_idx == level_i].ravel()
+        if recovered_of_level.size:
+            fractions[level_i] = (np.bincount(recovered_of_level, minlength=len(candidate_levels))
+                                  / recovered_of_level.size)
+    return fractions
+
+
 def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_noise: dict,
                                       candidate_params: np.ndarray, save_path: Path,
                                       param_name: str = "tau_ms", n_repeats: Optional[int] = None,
@@ -612,10 +680,13 @@ def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_nois
     Top: share of the recoveries for each TRUE level (rows) that landed on each RECOVERED level
     (columns); the diagonal is a correct recovery. Bottom: share of all recoveries per recovered
     level, the dashed line is a uniform guess (1 / number of levels).
+    The levels are the ground-truth levels (``ground_truth_levels``): each recovered value is snapped to
+    the nearest of them, so the matrix is square whatever the candidate grid (a finer or padded candidate
+    grid is shown in ``plot_recovered_candidate_heatmap``).
     recovered_by_noise : {noise: (n_voxels, n_repeats, 4)}
     """
     p = PARAM_NAMES.index(param_name)
-    levels = np.unique(candidate_params[:, p])
+    levels = ground_truth_levels(true_params, candidate_params, param_name)
     log_spaced = param_name in LOG_SPACED_PARAMS
     noise_levels = list(recovered_by_noise)
     n_levels = len(levels)
@@ -667,6 +738,75 @@ def plot_recovered_level_distribution(true_params: np.ndarray, recovered_by_nois
     logger.info("Recovered %s distribution plot saved -> %s", param_name, save_path.resolve())
 
 
+def plot_recovered_candidate_heatmap(true_params: np.ndarray, recovered_by_noise: dict,
+                                     candidate_params: np.ndarray, save_path: Path,
+                                     param_name: str = "tau_ms", n_repeats: Optional[int] = None,
+                                     design_label: Optional[str] = None) -> bool:
+    """Rectangular true-vs-recovered heatmap: ground-truth levels (rows) x ALL candidate-grid levels (columns).
+
+    One panel per noise level. Each row sums to 100 % (values under 2 % not printed); the white box marks the
+    candidate level equal to the true one. Columns outside the ground-truth range (padding of the candidate grid)
+    have grey tick labels, so a pile-up at the grid edge stays visible.
+
+    Nothing is written (returns False) when the ground truth sits on every candidate level: the square plot of
+    ``plot_recovered_level_distribution`` is then the same picture.
+
+    recovered_by_noise : {noise: (n_voxels, n_repeats, 4)}
+    """
+    p = PARAM_NAMES.index(param_name)
+    candidate_levels = np.unique(candidate_params[:, p])
+    true_levels = ground_truth_levels(true_params, candidate_params, param_name)
+    if len(true_levels) == len(candidate_levels):
+        logger.info("Ground truth sits on every %s candidate level: no rectangular heatmap", param_name)
+        return False
+    log_spaced = param_name in LOG_SPACED_PARAMS
+    noise_levels = list(recovered_by_noise)
+    n_true, n_candidates = len(true_levels), len(candidate_levels)
+    true_columns = _level_index(true_levels, candidate_levels, log_spaced)             # (n_true,)
+    def level_label(level: float) -> str:               # 3 significant digits, never scientific notation (1e+03)
+        return f"{level:.0f}" if level >= 100 else f"{level:.3g}"
+
+    candidate_labels = [level_label(level) for level in candidate_levels]
+    true_labels = [f"{level_label(level)}\n(n={int(np.isclose(true_params[:, p], level).sum())})"
+                   for level in true_levels]
+
+    fig, axes = plt.subplots(1, len(noise_levels), figsize=(max(5.0, 0.36 * n_candidates + 1.5) * len(noise_levels) + 0.8,
+                                                            0.9 * n_true + 3.2), squeeze=False)
+    for col, noise in enumerate(noise_levels):
+        recovered_value = recovered_by_noise[noise][:, :, p]
+        fractions = recovered_candidate_fractions(true_params[:, p], recovered_value, true_levels,
+                                                  candidate_levels, log_spaced)
+        ax = axes[0, col]
+        image = ax.imshow(fractions, vmin=0.0, vmax=1.0, cmap="viridis", aspect="auto")
+        for i in range(n_true):
+            for j in range(n_candidates):
+                if np.isfinite(fractions[i, j]) and fractions[i, j] >= 0.02:
+                    ax.text(j, i, f"{100 * fractions[i, j]:.0f}", ha="center", va="center", fontsize=7,
+                            color="white" if fractions[i, j] < 0.6 else "black")
+        for row, column in enumerate(true_columns):             # white box around the true level's own cell
+            ax.add_patch(plt.Rectangle((column - 0.5, row - 0.5), 1, 1, fill=False, edgecolor="white", linewidth=1.8))
+        ax.set_xticks(range(n_candidates))
+        ax.set_xticklabels(candidate_labels, rotation=90, fontsize=8)
+        for tick, level in zip(ax.get_xticklabels(), candidate_levels):
+            if level < true_levels.min() or level > true_levels.max():
+                tick.set_color("grey")
+        ax.set_yticks(range(n_true))
+        ax.set_yticklabels(true_labels if col == 0 else [])
+        ax.set_title(f"{noise} noise")
+        ax.set_xlabel(f"recovered {param_name} (candidate grid; grey = padding)")
+        if col == 0:
+            ax.set_ylabel(f"true {param_name} (n = voxels)")
+    fig.colorbar(image, ax=axes[0, :].tolist(), label="share of the recoveries of that true level",
+                 shrink=0.8, pad=0.02)
+    size = f" ({n_repeats:,} repeats per voxel)" if n_repeats else ""
+    fig.suptitle(titled(f"Recovered {param_name}: true level vs candidate-grid level, in % per true level{size}",
+                        design_label))
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Recovered %s candidate heatmap saved -> %s", param_name, save_path.resolve())
+    return True
+
+
 def save_margin_table(true_params: np.ndarray, result: dict, save_path: Path) -> None:
     """Per-voxel CSV: true params, winner params (first repeat), r_best, n_ties, margins."""
     recovered = result["recovered_params"][:, 0, :]
@@ -706,6 +846,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)))
     parser.add_argument("--grid-file", type=str, default=None,
                         help="Load a saved candidate_grid_*.npz instead of rebuilding.")
+    parser.add_argument("--tau-grid", choices=list(TAU_GRIDS), default="legacy",
+                        help="tau candidate grid when the grid is rebuilt. legacy: 20-400 ms, 9 levels. padded17: "
+                             "17 levels, 10.4-1919 ms, with the 5 ground-truth levels 20-1000 ms on it (the ground "
+                             "truth then uses only those 5).")
     parser.add_argument("--noise-model", choices=list(NOISE_MODELS), default="additive",
                         help="additive: MATLAB-style noise added as is to the signal scaled by one global "
                              "best-case constant (solver/additive_noise.py); legacy: noise scaled by "
@@ -746,7 +890,7 @@ def main() -> None:
     else:
         candidate_params, template_matrix_norm = build_candidate_grid(
             raw_psth_by_seq, n_cf, run_design, total_run_dur_s, tr_s, design.SILENCE_SEQ_ID,
-            hrf_kernel, n_workers=args.n_workers)
+            hrf_kernel, tau_grid_ms=TAU_GRIDS[args.tau_grid], n_workers=args.n_workers)
         np.savez(run_dir / f"candidate_grid_design{args.design_seed}.npz",
                  candidate_params=candidate_params, template_matrix_norm=template_matrix_norm)
 
